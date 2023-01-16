@@ -15,12 +15,10 @@
 package plan
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -301,10 +299,10 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 		Limit:   stmt.Limit,
 		With:    stmt.With,
 	}
-	ftCtx := tree.NewFmtCtx(dialect.MYSQL)
-	selectAst.Format(ftCtx)
-	sql := ftCtx.String()
-	fmt.Print(sql)
+	//ftCtx := tree.NewFmtCtx(dialect.MYSQL)
+	//selectAst.Format(ftCtx)
+	//sql := ftCtx.String()
+	//fmt.Print(sql)
 	return builder.buildSelect(selectAst, bindCtx, false)
 }
 
