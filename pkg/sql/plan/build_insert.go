@@ -56,6 +56,15 @@ func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pl
 		rootId:  -1,
 		tblInfo: tblInfo,
 	}
+	tblDef := tblInfo.tableDefs[0]
+	isClusterTable := util.TableIsClusterTable(tblDef.GetTableType())
+	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert data into the cluster table")
+	}
+	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tblDef, isClusterTable)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindCtx := NewBindContext(builder, nil)
@@ -63,16 +72,9 @@ func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pl
 	bindCtx.aggregateTag = builder.genNewTag()
 	bindCtx.projectTag = builder.genNewTag()
 
-	rewriteInfo.rootId, err = insertToSelect(builder, bindCtx, stmt, tblInfo)
+	err = initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
-	}
-
-	if checkIfStmtHaveRewriteConstraint(tblInfo) {
-		err = initInsertStmt(builder, bindCtx, rewriteInfo, stmt)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
@@ -80,6 +82,8 @@ func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pl
 	if err != nil {
 		return nil, err
 	}
+
+	// append insert node
 
 	return &Plan{
 		Plan: &plan.Plan_Query{

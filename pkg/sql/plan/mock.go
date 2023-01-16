@@ -518,9 +518,11 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 						Width:       col.Width,
 						Precision:   col.Precision,
 					},
-					Name:    col.Name,
-					Pkidx:   1,
-					Default: &plan.Default{},
+					Name:  col.Name,
+					Pkidx: 1,
+					Default: &plan.Default{
+						NullAbility: col.Nullable,
+					},
 				})
 			}
 

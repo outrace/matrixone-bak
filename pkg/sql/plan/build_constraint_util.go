@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -306,10 +304,29 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	return builder.buildSelect(selectAst, bindCtx, false)
 }
 
-func insertToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlTableInfo) (int32, error) {
+func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) error {
+	var err error
+	syntaxHasColumnNames := false
+	if stmt.Columns != nil {
+		syntaxHasColumnNames = true
+	}
+	tableDef := info.tblInfo.tableDefs[0]
+
 	var astSlt *tree.Select
 	switch slt := stmt.Rows.Select.(type) {
 	case *tree.ValuesClause:
+
+		isAllDefault := false
+		if slt.Rows[0] == nil {
+			isAllDefault = true
+		}
+		//example1:insert into a(a) values ();
+		//but it does not work at the case:
+		//insert into a(a) values (0),();
+		if isAllDefault && syntaxHasColumnNames {
+			return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+		}
+
 		slt.RowWord = true
 		astSlt = &tree.Select{
 			Select: &tree.SelectClause{
@@ -338,28 +355,8 @@ func insertToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	case *tree.ParenSelect:
 		astSlt = slt.Select
 	default:
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
+		return moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
-
-	nodeId, err := builder.buildSelect(astSlt, bindCtx, false)
-	if err != nil {
-		return 0, err
-	}
-
-	tableDef := info.tableDefs[0]
-	columnToIdx := make(map[string]int)
-	for i, column := range stmt.Columns {
-		columnToIdx[string(column)] = i
-	}
-	colToIdx := make(map[string]int)
-	for i, col := range tableDef.Cols {
-		colToIdx[col.Name] = i
-	}
-
-	node := builder.qry.Nodes[nodeId]
-	oldProject := append([]*Expr{}, node.ProjectList...)
-	// reset project. make pos to fit tableDef.Cols's pos
-	node.ProjectList = make([]*Expr, 0, len(tableDef.Cols)-1)
 
 	compositePkey := ""
 	if tableDef.CompositePkey != nil {
@@ -370,87 +367,132 @@ func insertToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		clusterByKey = tableDef.ClusterBy.Name
 	}
 
+	subCtx := NewBindContext(builder, bindCtx)
+	info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
+	if err != nil {
+		return err
+	}
+	err = builder.addBinding(info.rootId, tree.AliasClause{
+		Alias: derivedTableName,
+	}, bindCtx)
+	if err != nil {
+		return err
+	}
+
+	lastNode := builder.qry.Nodes[info.rootId]
+	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
+	info.derivedTableId = info.rootId
+	oldProject := append([]*Expr{}, lastNode.ProjectList...)
+
+	colToIdx := make(map[string]int)
+	for i, col := range tableDef.Cols {
+		colToIdx[col.Name] = i
+	}
+
+	columnToExpr := make(map[string]*Expr)
+	for i, column := range stmt.Columns {
+		columnStr := string(column)
+		colIdx, exists := colToIdx[columnStr]
+		if !exists {
+			return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", columnStr)
+		}
+		projExpr := &plan.Expr{
+			Typ: oldProject[i].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: tag,
+					ColPos: int32(i),
+				},
+			},
+		}
+		if !isSameColumnType(projExpr.Typ, tableDef.Cols[colIdx].Typ) {
+			projExpr, err = appendCastBeforeExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return err
+			}
+		}
+		columnToExpr[columnStr] = projExpr
+	}
+
+	info.projectList = make([]*Expr, 0, len(tableDef.Cols)-1)
+
 	for _, col := range tableDef.Cols {
 		if col.Name == catalog.Row_ID {
 			continue
-
 		} else if col.Name == compositePkey {
 			// append composite primary key
 			colNames := util.SplitCompositePrimaryKeyColumnName(compositePkey)
 			args := make([]*Expr, len(colNames))
-
 			for _, colName := range colNames {
-				if oldIdx, exists := columnToIdx[col.Name]; exists {
-					args = append(args, oldProject[oldIdx])
+				if oldExpr, exists := columnToExpr[col.Name]; exists {
+					args = append(args, oldExpr)
 				} else {
-					col := tableDef.Cols[colToIdx[colName]]
-					if col.Default != nil {
-						node.ProjectList = append(node.ProjectList, col.Default.Expr)
-					} else if !col.NotNull {
-						constExpr := makePlan2DateConstNullExpr(types.T(col.Typ.Id))
-						node.ProjectList = append(node.ProjectList, constExpr)
-					} else {
-						return 0, moerr.NewInvalidInput(builder.GetContext(), fmt.Sprintf("column '%v' have not value to insert", col.Name))
+					col = tableDef.Cols[colToIdx[colName]]
+					defExpr, err := getDefaultExpr(builder.GetContext(), col)
+					if err != nil {
+						return err
 					}
+					args = append(args, defExpr)
 				}
 			}
 			serFunExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 			if err != nil {
-				return 0, err
+				return err
 			}
-			node.ProjectList = append(node.ProjectList, serFunExpr)
+			info.projectList = append(info.projectList, serFunExpr)
 
 		} else if col.Name == clusterByKey {
 			// append composite cluster key
 			colNames := util.SplitCompositeClusterByColumnName(clusterByKey)
 			args := make([]*Expr, len(colNames))
-
 			for _, colName := range colNames {
-				if oldIdx, exists := columnToIdx[col.Name]; exists {
-					args = append(args, oldProject[oldIdx])
+				if oldExpr, exists := columnToExpr[col.Name]; exists {
+					args = append(args, oldExpr)
 				} else {
-					col := tableDef.Cols[colToIdx[colName]]
-					if col.Default != nil {
-						node.ProjectList = append(node.ProjectList, col.Default.Expr)
-					} else if !col.NotNull {
-						constExpr := makePlan2DateConstNullExpr(types.T(col.Typ.Id))
-						node.ProjectList = append(node.ProjectList, constExpr)
-					} else {
-						return 0, moerr.NewInvalidInput(builder.GetContext(), fmt.Sprintf("column '%v' have not value to insert", col.Name))
+					col = tableDef.Cols[colToIdx[colName]]
+					defExpr, err := getDefaultExpr(builder.GetContext(), col)
+					if err != nil {
+						return err
 					}
+					args = append(args, defExpr)
 				}
 			}
 			serFunExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 			if err != nil {
-				return 0, err
+				return err
 			}
-			node.ProjectList = append(node.ProjectList, serFunExpr)
+			info.projectList = append(info.projectList, serFunExpr)
 
 		} else {
-			if oldIdx, exists := columnToIdx[col.Name]; exists {
-				colExpr := oldProject[oldIdx]
-				if !isSameColumnType(colExpr.Typ, col.Typ) {
-					colExpr, err = appendCastBeforeExpr(bindCtx.binder.GetContext(), colExpr, col.Typ)
-					if err != nil {
-						return 0, err
-					}
-				}
-				node.ProjectList = append(node.ProjectList, colExpr)
+			if oldExpr, exists := columnToExpr[col.Name]; exists {
+				info.projectList = append(info.projectList, oldExpr)
 			} else {
-				if col.Default != nil {
-					node.ProjectList = append(node.ProjectList, col.Default.Expr)
-				} else if !col.NotNull {
-					constExpr := makePlan2DateConstNullExpr(types.T(col.Typ.Id))
-					node.ProjectList = append(node.ProjectList, constExpr)
-				} else {
-					return 0, moerr.NewInvalidInput(builder.GetContext(), fmt.Sprintf("column '%v' have not value to insert", col.Name))
+				defExpr, err := getDefaultExpr(builder.GetContext(), col)
+				if err != nil {
+					return err
 				}
+				info.projectList = append(info.projectList, defExpr)
 			}
 		}
-
 	}
 
-	return 0, nil
+	if checkIfStmtHaveRewriteConstraint(info.tblInfo) {
+		err = rewriteDmlSelectInfo(builder, bindCtx, info, tableDef, info.derivedTableId)
+		if err != nil {
+			return err
+		}
+	}
+
+	// append ProjectNode
+	info.rootId = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: info.projectList,
+		Children:    []int32{info.rootId},
+		BindingTags: []int32{bindCtx.projectTag},
+	}, bindCtx)
+	bindCtx.results = info.projectList
+
+	return nil
 }
 
 func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool) (int32, error) {
@@ -520,10 +562,6 @@ func checkIfStmtHaveRewriteConstraint(tblInfo *dmlTableInfo) bool {
 		}
 	}
 	return false
-}
-
-func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, stmt *tree.Insert) error {
-	return nil
 }
 
 func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, stmt *tree.Delete) error {
