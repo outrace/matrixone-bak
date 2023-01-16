@@ -52,12 +52,14 @@ type dmlSelectInfo struct {
 }
 
 type dmlTableInfo struct {
-	objRef     []*ObjectRef
-	tableDefs  []*TableDef
-	updateKeys []map[string]tree.Expr
-	nameToIdx  map[string]int
-	idToName   map[uint64]string
-	alias      map[string]int
+	objRef           []*ObjectRef
+	tableDefs        []*TableDef
+	updateKeys       []map[string]tree.Expr
+	updateExprPosMap map[int]int
+	selectListSize   int
+	nameToIdx        map[string]int
+	idToName         map[uint64]string
+	alias            map[string]int
 }
 
 func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
@@ -171,7 +173,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 			return err
 		}
 		if jionTbl.Right != nil {
-			return setTableExprToDmlTableInfo(ctx, jionTbl.Left, tblInfo, aliasMap)
+			return setTableExprToDmlTableInfo(ctx, jionTbl.Right, tblInfo, aliasMap)
 		}
 		return nil
 	}
@@ -254,6 +256,40 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 		}
 	}
 
+	//------------------------------------------wuxiliang add--------------------------------------------
+
+	updateExprPosMap := make(map[int]int)
+	tableColsOffset, size := makeTableColOffset(tableInfo)
+	counter := 0
+	for idx, tbUpdateMap := range tableInfo.updateKeys {
+		tableDef := tableInfo.tableDefs[idx]
+
+		for colName, updateCol := range tbUpdateMap {
+			valuePos := size + counter
+			// Add update expression after select list
+			selectList = append(selectList, tree.SelectExpr{
+				Expr: updateCol,
+			})
+
+			found := false
+			for j, coldef := range tableDef.Cols {
+				if colName == coldef.Name {
+					found = true
+					keyPos := tableColsOffset[idx] + j
+					updateExprPosMap[keyPos] = valuePos
+					break
+				}
+			}
+			if !found {
+				return -1, moerr.NewInvalidInput(builder.GetContext(), "Column '%s' does not exist in the table", colName)
+			}
+			counter++
+		}
+	}
+	tableInfo.updateExprPosMap = updateExprPosMap
+	tableInfo.selectListSize = size
+	//--------------------------------------wuxiliang add------------------------------------------------
+
 	selectAst := &tree.Select{
 		Select: &tree.SelectClause{
 			Distinct: false,
@@ -270,6 +306,20 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	sql := ftCtx.String()
 	fmt.Print(sql)
 	return builder.buildSelect(selectAst, bindCtx, false)
+}
+
+// First parameter: table Columns Offset in subquery
+// Second parameter: size of all table Columns
+func makeTableColOffset(tableInfo *dmlTableInfo) (map[int]int, int) {
+	// key -> dmlTableInfo array index
+	// value -> select columns list offset
+	tableColsOffset := make(map[int]int)
+	count := 0
+	for i, tableDef := range tableInfo.tableDefs {
+		tableColsOffset[i] = count
+		count += len(tableDef.Cols)
+	}
+	return tableColsOffset, count
 }
 
 // func expandTableColumns(builder *QueryBuilder, tableInfo *dmlTableInfo) []tree.SelectExpr {
@@ -423,20 +473,24 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
 
-	indexOfUpdateCol, err := getIndexOfUpdateCol(info.tblInfo, builder.compCtx)
-	if err != nil {
-		return err
-	}
-
+	updateExprPosMap := info.tblInfo.updateExprPosMap
 	for idx, expr := range builder.qry.Nodes[info.rootId].ProjectList {
 		// reset project with update value
 		// reset project with hidden column
-		if updateExpr, ok := indexOfUpdateCol[idx]; ok {
-			err := modifyPlanExprTag(updateExpr, tag)
-			if err != nil {
-				return err
-			}
-			info.projectList = append(info.projectList, updateExpr)
+		if idx >= info.tblInfo.selectListSize {
+			break
+		}
+
+		if updateExprPos, ok := updateExprPosMap[idx]; ok {
+			info.projectList = append(info.projectList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tag,
+						ColPos: int32(updateExprPos),
+					},
+				},
+			})
 		} else {
 			info.projectList = append(info.projectList, &plan.Expr{
 				Typ: expr.Typ,
@@ -448,87 +502,87 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 				},
 			})
 		}
-
 	}
+
 	return nil
 }
 
-// Modify the tag of the table column which used in the update expression
-func modifyPlanExprTag(updateExpr *plan.Expr, tag int32) error {
-	switch expr := updateExpr.Expr.(type) {
-	case *plan.Expr_Col:
-		expr.Col.RelPos = tag
-	case *plan.Expr_F:
-		args := expr.F.GetArgs()
-		for _, arg := range args {
-			err := modifyPlanExprTag(arg, tag)
-			if err != nil {
-				return err
-			}
-		}
-	default:
-		return nil
-	}
-	return nil
-}
-
-// Get the map of index location to update plan expression
-func getIndexOfUpdateCol(tblInfo *dmlTableInfo, ctx CompilerContext) (map[int]*plan.Expr, error) {
-	indexToPlanExpr := make(map[int]*plan.Expr)
-	pos := 0
-	for i := 0; i < len(tblInfo.tableDefs); i++ {
-		tableDef := tblInfo.tableDefs[i]
-		updateCols := tblInfo.updateKeys[i]
-
-		updatePlanCols, err := bindUpdateCol(ctx, updateCols, tableDef)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, col := range tableDef.Cols {
-			if expr, ok := updatePlanCols[col.Name]; ok {
-				indexToPlanExpr[pos] = expr
-			}
-			pos++
-		}
-	}
-	return indexToPlanExpr, nil
-}
-
-// According to the definition of the table, use the projectbinder to bind the column expression and generate plan expression
-func bindUpdateCol(ctx CompilerContext, updateCols map[string]tree.Expr, tableDef *TableDef) (map[string]*plan.Expr, error) {
-	colMap := make(map[string]*plan.Expr)
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-	bindContext := NewBindContext(builder, nil)
-
-	nodeID := builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_TABLE_SCAN,
-		Stats:       nil,
-		ObjRef:      nil,
-		TableDef:    tableDef,
-		BindingTags: []int32{builder.genNewTag()},
-	}, bindContext)
-
-	err := builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
-	if err != nil {
-		return nil, err
-	}
-
-	projectionBinder := NewProjectionBinder(builder, bindContext, nil)
-	for colName, updateCol := range updateCols {
-		astExpr, err := bindContext.qualifyColumnNames(updateCol, nil, false)
-		if err != nil {
-			return nil, err
-		}
-
-		expr, err := projectionBinder.BindExpr(astExpr, 0, true)
-		if err != nil {
-			return nil, err
-		}
-		colMap[colName] = expr
-	}
-	return colMap, nil
-}
+//// Modify the tag of the table column which used in the update expression
+//func modifyPlanExprTag(updateExpr *plan.Expr, tag int32) error {
+//	switch expr := updateExpr.Expr.(type) {
+//	case *plan.Expr_Col:
+//		expr.Col.RelPos = tag
+//	case *plan.Expr_F:
+//		args := expr.F.GetArgs()
+//		for _, arg := range args {
+//			err := modifyPlanExprTag(arg, tag)
+//			if err != nil {
+//				return err
+//			}
+//		}
+//	default:
+//		return nil
+//	}
+//	return nil
+//}
+//
+//// Get the map of index location to update plan expression
+//func getIndexOfUpdateCol(tblInfo *dmlTableInfo, ctx CompilerContext) (map[int]*plan.Expr, error) {
+//	indexToPlanExpr := make(map[int]*plan.Expr)
+//	pos := 0
+//	for i := 0; i < len(tblInfo.tableDefs); i++ {
+//		tableDef := tblInfo.tableDefs[i]
+//		updateCols := tblInfo.updateKeys[i]
+//
+//		updatePlanCols, err := bindUpdateCol(ctx, updateCols, tableDef)
+//		if err != nil {
+//			return nil, err
+//		}
+//
+//		for _, col := range tableDef.Cols {
+//			if expr, ok := updatePlanCols[col.Name]; ok {
+//				indexToPlanExpr[pos] = expr
+//			}
+//			pos++
+//		}
+//	}
+//	return indexToPlanExpr, nil
+//}
+//
+//// According to the definition of the table, use the projectbinder to bind the column expression and generate plan expression
+//func bindUpdateCol(ctx CompilerContext, updateCols map[string]tree.Expr, tableDef *TableDef) (map[string]*plan.Expr, error) {
+//	colMap := make(map[string]*plan.Expr)
+//	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+//	bindContext := NewBindContext(builder, nil)
+//
+//	nodeID := builder.appendNode(&plan.Node{
+//		NodeType:    plan.Node_TABLE_SCAN,
+//		Stats:       nil,
+//		ObjRef:      nil,
+//		TableDef:    tableDef,
+//		BindingTags: []int32{builder.genNewTag()},
+//	}, bindContext)
+//
+//	err := builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	projectionBinder := NewProjectionBinder(builder, bindContext, nil)
+//	for colName, updateCol := range updateCols {
+//		astExpr, err := bindContext.qualifyColumnNames(updateCol, nil, false)
+//		if err != nil {
+//			return nil, err
+//		}
+//
+//		expr, err := projectionBinder.BindExpr(astExpr, 0, true)
+//		if err != nil {
+//			return nil, err
+//		}
+//		colMap[colName] = expr
+//	}
+//	return colMap, nil
+//}
 
 func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, tableDef *TableDef, baseNodeId int32) error {
 	posMap := make(map[string]int32)

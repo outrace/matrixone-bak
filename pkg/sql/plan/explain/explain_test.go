@@ -36,7 +36,10 @@ func TestSingleSql(t *testing.T) {
 	//input := "explain verbose select * from part where p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')"
 	//input := "explain select abs(N_REGIONKEY) from NATION"
 	//input := "explain verbose SELECT l.L_ORDERKEY a FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10"
-	input := "explain verbose update emp set sal = sal + 500, comm = 1200 where deptno = 10"
+	//input := "explain verbose update emp set sal = sal + 500, comm = 1200 where deptno = 10"
+	//input := "explain verbose update emp t1 inner join dept t2 on t1.deptno = t2.deptno set t1.sal = t1.sal+ t2.deptno where t2.dname = 'RESEARCH'"
+	//input := "explain verbose update emp t1 set t1.sal = t1.sal+ 20, t1.comm = t1.comm + t1.sal"
+	input := "explain verbose update emp t1 inner join dept t2 on t1.deptno = t2.deptno set t1.sal = t1.sal+ 20, t1.comm = t1.comm + t1.sal"
 	mock := plan.NewMockOptimizer(false)
 	err := runOneStmt(mock, t, input)
 	if err != nil {
@@ -305,6 +308,17 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno > 7800",
 		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno = 7839",
 		"explain verbose DELETE FROM emp, dept USING emp INNER JOIN dept WHERE emp.deptno = dept.deptno",
+	}
+	mockOptimizer := plan.NewMockOptimizer(true)
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
+func TestUpdateSQL(t *testing.T) {
+	sqls := []string{
+		"explain verbose update emp set sal = sal + 500, comm = 1200 where deptno = 10",
+		"explain verbose update emp t1 inner join dept t2 on t1.deptno = t2.deptno set t1.sal = t1.sal+ t2.deptno where t2.dname = 'RESEARCH'",
+		"explain verbose update emp t1 set t1.sal = t1.sal+ 20, t1.comm = t1.comm + t1.sal",
+		"explain verbose update emp t1 inner join dept t2 on t1.deptno = t2.deptno set t1.sal = t1.sal+ 20, t1.comm = t1.comm + t1.sal",
 	}
 	mockOptimizer := plan.NewMockOptimizer(true)
 	runTestShouldPass(mockOptimizer, t, sqls)
