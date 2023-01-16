@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -270,32 +272,81 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	return builder.buildSelect(selectAst, bindCtx, false)
 }
 
-// func expandTableColumns(builder *QueryBuilder, tableInfo *dmlTableInfo) []tree.SelectExpr {
-// 	var selectExprs []tree.SelectExpr
-// 	for alias, i := range tableInfo.alias {
-// 		tableDef := tableInfo.tableDefs[i]
-// 		//objRef := tableInfo.objRef[i]
-// 		updateCols := tableInfo.updateKeys[i]
+func insertToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlTableInfo) (int32, error) {
+	var astSlt *tree.Select
+	switch slt := stmt.Rows.Select.(type) {
+	case *tree.ValuesClause:
+		slt.RowWord = true
+		astSlt = &tree.Select{
+			Select: &tree.SelectClause{
+				Exprs: []tree.SelectExpr{
+					{
+						Expr: tree.UnqualifiedStar{},
+					},
+				},
+				From: &tree.From{
+					Tables: []tree.TableExpr{
+						&tree.JoinTableExpr{
+							JoinType: tree.JOIN_TYPE_CROSS,
+							Left: &tree.AliasedTableExpr{
+								As: tree.AliasClause{},
+								Expr: &tree.ParenTableExpr{
+									Expr: &tree.Select{Select: slt},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	case *tree.SelectClause:
+		astSlt = stmt.Rows
+	case *tree.ParenSelect:
+		astSlt = slt.Select
+	default:
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
+	}
 
-// 		for _, col := range tableDef.Cols {
-// 			if v, ok := updateCols[col.Name]; ok {
-// 				expr := tree.SelectExpr{
-// 					Expr: v,
-// 				}
-// 				selectExprs = append(selectExprs, expr)
-// 			} else {
-// 				ret, _ := tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
-// 				expr := tree.SelectExpr{
-// 					Expr: ret,
-// 				}
-// 				selectExprs = append(selectExprs, expr)
-// 			}
-// 		}
-// 	}
-// 	return selectExprs
-// }
+	nodeId, err := builder.buildSelect(astSlt, bindCtx, false)
+	if err != nil {
+		return 0, err
+	}
 
-func insertToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Insert, haveConstraint bool) (int32, error) {
+	tableDef := info.tableDefs[0]
+	columnToIdx := make(map[string]int)
+	for i, column := range stmt.Columns {
+		columnToIdx[string(column)] = i
+	}
+	node := builder.qry.Nodes[nodeId]
+	oldProject := append([]*Expr{}, node.ProjectList...)
+	// reset project
+	node.ProjectList = make([]*Expr, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			// todo
+		} else {
+			if oldIdx, exists := columnToIdx[col.Name]; exists {
+				colExpr := oldProject[oldIdx]
+				if !isSameColumnType(colExpr.Typ, col.Typ) {
+					colExpr, err = appendCastBeforeExpr(bindCtx.binder.GetContext(), colExpr, col.Typ)
+					if err != nil {
+						return 0, err
+					}
+				}
+				node.ProjectList = append(node.ProjectList, colExpr)
+			} else {
+				if col.Default != nil {
+					node.ProjectList = append(node.ProjectList, col.Default.Expr)
+				} else if !col.NotNull {
+					constExpr := makePlan2DateConstNullExpr(types.T(col.Typ.Id))
+					node.ProjectList = append(node.ProjectList, constExpr)
+				} else {
+					return 0, moerr.NewInvalidInput(builder.GetContext(), fmt.Sprintf("column '%v' have not value to insert", col.Name))
+				}
+			}
+		}
+	}
+
 	return 0, nil
 }
 
@@ -366,6 +417,10 @@ func checkIfStmtHaveRewriteConstraint(tblInfo *dmlTableInfo) bool {
 		}
 	}
 	return false
+}
+
+func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, stmt *tree.Insert) error {
+	return nil
 }
 
 func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, stmt *tree.Delete) error {

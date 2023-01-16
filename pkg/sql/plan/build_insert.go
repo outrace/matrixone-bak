@@ -43,13 +43,49 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 }
 
 func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-	bindCtx := NewBindContext(builder, nil)
-	_, err = insertToSelect(builder, bindCtx, stmt, false)
+	if stmt.OnDuplicateUpdate != nil {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ...")
+	}
+
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil)
 	if err != nil {
 		return nil, err
 	}
-	return nil, nil
+	rewriteInfo := &dmlSelectInfo{
+		typ:     "insert",
+		rootId:  -1,
+		tblInfo: tblInfo,
+	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.groupTag = builder.genNewTag()
+	bindCtx.aggregateTag = builder.genNewTag()
+	bindCtx.projectTag = builder.genNewTag()
+
+	rewriteInfo.rootId, err = insertToSelect(builder, bindCtx, stmt, tblInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	if checkIfStmtHaveRewriteConstraint(tblInfo) {
+		err = initInsertStmt(builder, bindCtx, rewriteInfo, stmt)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, err
 }
 
 func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
