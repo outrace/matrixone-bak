@@ -1203,19 +1203,18 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				}
 				if len(argsCastType) > 0 {
 					colTyp = makePlan2Type(&argsCastType[0])
-				}
-				for j := 0; j < rowCount; i++ {
-					if rows[j].Typ.Id != int32(types.T_any) && rows[j].Typ.Id != colTyp.Id {
-						rows[j], err = appendCastBeforeExpr(builder.GetContext(), rows[j], colTyp)
-						if err != nil {
-							return 0, err
+					for j := 0; j < rowCount; i++ {
+						if rows[j].Typ.Id != int32(types.T_any) && rows[j].Typ.Id != colTyp.Id {
+							rows[j], err = appendCastBeforeExpr(builder.GetContext(), rows[j], colTyp)
+							if err != nil {
+								return 0, err
+							}
 						}
 					}
 				}
 			}
 			if colTyp == nil {
-				typ := types.T_any.ToType()
-				colTyp = makePlan2Type(&typ)
+				colTyp = rows[0].Typ
 			}
 
 			colName := fmt.Sprintf("column_%d", i) // like MySQL
