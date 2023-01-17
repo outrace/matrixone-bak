@@ -43,13 +43,53 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 }
 
 func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-	bindCtx := NewBindContext(builder, nil)
-	_, err = insertToSelect(builder, bindCtx, stmt, false)
+	if stmt.OnDuplicateUpdate != nil {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ...")
+	}
+
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil)
 	if err != nil {
 		return nil, err
 	}
-	return nil, nil
+	rewriteInfo := &dmlSelectInfo{
+		typ:     "insert",
+		rootId:  -1,
+		tblInfo: tblInfo,
+	}
+	tblDef := tblInfo.tableDefs[0]
+	isClusterTable := util.TableIsClusterTable(tblDef.GetTableType())
+	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert data into the cluster table")
+	}
+	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tblDef, isClusterTable)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.groupTag = builder.genNewTag()
+	bindCtx.aggregateTag = builder.genNewTag()
+	bindCtx.projectTag = builder.genNewTag()
+
+	err = initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+
+	// append insert node
+
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, err
 }
 
 func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
