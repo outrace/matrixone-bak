@@ -60,9 +60,9 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		return false, nil
 	}
 
-	for i := range bat.Vecs {
-		bat.Vecs[i] = bat.Vecs[i].ConstExpand(false, proc.Mp())
-	}
+	// for i := range bat.Vecs {
+	// 	bat.Vecs[i] = bat.Vecs[i].ConstExpand(false, proc.Mp())
+	// }
 
 	defer bat.Clean(proc.Mp())
 	var affectedRows uint64
