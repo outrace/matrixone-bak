@@ -129,6 +129,8 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 						return nil, moerr.NewInternalError(ctx.GetContext(), "Column '%v' in field list is ambiguous", colName)
 					}
 					appendToTbl(alias, colName, expr)
+				} else {
+					return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", colName, tblName)
 				}
 			}
 		}
@@ -613,10 +615,11 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 		return err
 	}
 
+	lastNode := builder.qry.Nodes[info.rootId]
 	info.idx = int32(len(info.tblInfo.objRef))
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
-	for idx, expr := range builder.qry.Nodes[info.rootId].ProjectList {
+	for idx, expr := range lastNode.ProjectList {
 		if expr.Typ.Id == int32(types.T_Rowid) {
 			info.projectList = append(info.projectList, &plan.Expr{
 				Typ: expr.Typ,
@@ -647,23 +650,68 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 		return err
 	}
 
-	info.idx = int32(len(info.tblInfo.objRef))
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
 
+	idx := 0
 	for i, tableDef := range info.tblInfo.tableDefs {
-
-		// compositePkey := ""
-		// if tableDef.CompositePkey != nil {
-		// 	compositePkey = tableDef.CompositePkey.Name
-		// }
-		// clusterByKey := ""
-		// if tableDef.ClusterBy != nil {
-		// 	clusterByKey = tableDef.ClusterBy.Name
-		// }
-
 		updateOffsetMap := info.tblInfo.updateColOffset[i]
-		idx := 0
+		nameToIdx := make(map[string]int32)
+		for j, coldef := range tableDef.Cols {
+			nameToIdx[coldef.Name] = int32(j)
+		}
+
+		getHiddenColumnExpr := func(colNames []string) (*Expr, error) {
+			changeCol := false
+			for _, colName := range colNames {
+				if _, ok := updateOffsetMap[colName]; ok {
+					changeCol = true
+					break
+				}
+			}
+			if !changeCol {
+				return nil, nil
+			}
+			args := make([]*Expr, len(colNames))
+			for _, colName := range colNames {
+				coldef := tableDef.Cols[nameToIdx[colName]]
+				args = append(args, &plan.Expr{
+					Typ: coldef.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: tag,
+							ColPos: nameToIdx[colName],
+						},
+					},
+				})
+			}
+			return bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+		}
+
+		var compositePkeyExpr *Expr
+		var compositePkey string
+		if tableDef.CompositePkey != nil {
+			compositePkey = tableDef.CompositePkey.Name
+			colNames := util.SplitCompositePrimaryKeyColumnName(compositePkey)
+			// check if update composite key
+			compositePkeyExpr, err = getHiddenColumnExpr(colNames)
+			if err != nil {
+				return err
+			}
+		}
+
+		var ClusterByExpr *Expr
+		var clusterByKey string
+		if tableDef.ClusterBy != nil {
+			clusterByKey = tableDef.ClusterBy.Name
+			colNames := util.SplitCompositeClusterByColumnName(clusterByKey)
+			// check if update cluster by key
+			ClusterByExpr, err = getHiddenColumnExpr(colNames)
+			if err != nil {
+				return err
+			}
+		}
+
 		for _, coldef := range tableDef.Cols {
 			if pos, ok := updateOffsetMap[coldef.Name]; ok {
 				info.projectList = append(info.projectList, &plan.Expr{
@@ -675,13 +723,14 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 						},
 					},
 				})
+
+			} else if coldef.Name == compositePkey && compositePkeyExpr != nil {
+				info.projectList = append(info.projectList, compositePkeyExpr)
+
+			} else if coldef.Name == clusterByKey && ClusterByExpr != nil {
+				info.projectList = append(info.projectList, ClusterByExpr)
+
 			} else {
-				// todo
-				// if coldef.Name == compositePkey {
-
-				// } else if coldef.Name == clusterByKey {
-
-				// }
 				info.projectList = append(info.projectList, &plan.Expr{
 					Typ: coldef.Typ,
 					Expr: &plan.Expr_Col{
@@ -692,9 +741,11 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 					},
 				})
 			}
+
 			idx++
 		}
 	}
+	info.idx = int32(len(info.projectList))
 	return nil
 }
 

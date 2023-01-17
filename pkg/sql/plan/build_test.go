@@ -629,6 +629,7 @@ func TestUpdate(t *testing.T) {
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"update NATION a join NATION2 b on a.N_REGIONKEY = b.R_REGIONKEY set a.N_NAME = 'aa'",
 		"prepare stmt1 from 'update nation set n_name = ? where n_nationkey > ?'",
+		"drop index idx1 on test_idx",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -636,7 +637,6 @@ func TestUpdate(t *testing.T) {
 	sqls = []string{
 		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
 		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
-		"drop index idx1 on test_idx",
 	}
 	runTestShouldError(mock, t, sqls)
 }
