@@ -50,14 +50,13 @@ type dmlSelectInfo struct {
 }
 
 type dmlTableInfo struct {
-	objRef           []*ObjectRef
-	tableDefs        []*TableDef
-	updateKeys       []map[string]tree.Expr
-	updateExprPosMap map[int]int
-	selectListSize   int
-	nameToIdx        map[string]int
-	idToName         map[uint64]string
-	alias            map[string]int
+	objRef          []*ObjectRef
+	tableDefs       []*TableDef
+	updateColOffset []map[string]int
+	updateKeys      []map[string]tree.Expr
+	nameToIdx       map[string]int
+	idToName        map[uint64]string
+	alias           map[string]int
 }
 
 func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
@@ -256,25 +255,30 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 
 	//------------------------------------------wuxiliang add--------------------------------------------
 
-	updateExprPosMap := make(map[int]int)
-	tableColsOffset, size := makeTableColOffset(tableInfo)
+	// Count the total number of rows in all tables
+	columnsSize := 0
+	for _, tableDef := range tableInfo.tableDefs {
+		columnsSize += len(tableDef.Cols)
+	}
+
 	counter := 0
+	updateColsOffset := make([]map[string]int, len(tableInfo.updateKeys))
 	for idx, tbUpdateMap := range tableInfo.updateKeys {
 		tableDef := tableInfo.tableDefs[idx]
+		updateColsOffset[idx] = make(map[string]int)
 
 		for colName, updateCol := range tbUpdateMap {
-			valuePos := size + counter
+			valuePos := columnsSize + counter
 			// Add update expression after select list
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateCol,
 			})
 
 			found := false
-			for j, coldef := range tableDef.Cols {
+			for _, coldef := range tableDef.Cols {
 				if colName == coldef.Name {
 					found = true
-					keyPos := tableColsOffset[idx] + j
-					updateExprPosMap[keyPos] = valuePos
+					updateColsOffset[idx][colName] = valuePos
 					break
 				}
 			}
@@ -284,8 +288,7 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 			counter++
 		}
 	}
-	tableInfo.updateExprPosMap = updateExprPosMap
-	tableInfo.selectListSize = size
+	tableInfo.updateColOffset = updateColsOffset
 	//--------------------------------------wuxiliang add------------------------------------------------
 
 	selectAst := &tree.Select{
@@ -304,20 +307,6 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	//sql := ftCtx.String()
 	//fmt.Print(sql)
 	return builder.buildSelect(selectAst, bindCtx, false)
-}
-
-// First parameter: table Columns Offset in subquery
-// Second parameter: size of all table Columns
-func makeTableColOffset(tableInfo *dmlTableInfo) (map[int]int, int) {
-	// key -> dmlTableInfo array index
-	// value -> select columns list offset
-	tableColsOffset := make(map[int]int)
-	count := 0
-	for i, tableDef := range tableInfo.tableDefs {
-		tableColsOffset[i] = count
-		count += len(tableDef.Cols)
-	}
-	return tableColsOffset, count
 }
 
 // func expandTableColumns(builder *QueryBuilder, tableInfo *dmlTableInfo) []tree.SelectExpr {
@@ -471,36 +460,65 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
 
-	updateExprPosMap := info.tblInfo.updateExprPosMap
-	for idx, expr := range builder.qry.Nodes[info.rootId].ProjectList {
-		// reset project with update value
-		// reset project with hidden column
-		if idx >= info.tblInfo.selectListSize {
-			break
-		}
-
-		if updateExprPos, ok := updateExprPosMap[idx]; ok {
-			info.projectList = append(info.projectList, &plan.Expr{
-				Typ: expr.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: tag,
-						ColPos: int32(updateExprPos),
+	for i, tableDef := range info.tblInfo.tableDefs {
+		updateOffsetMap := info.tblInfo.updateColOffset[i]
+		idx := 0
+		for _, coldef := range tableDef.Cols {
+			if pos, ok := updateOffsetMap[coldef.Name]; ok {
+				info.projectList = append(info.projectList, &plan.Expr{
+					Typ: coldef.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: tag,
+							ColPos: int32(pos),
+						},
 					},
-				},
-			})
-		} else {
-			info.projectList = append(info.projectList, &plan.Expr{
-				Typ: expr.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: tag,
-						ColPos: int32(idx),
+				})
+			} else {
+				info.projectList = append(info.projectList, &plan.Expr{
+					Typ: coldef.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: tag,
+							ColPos: int32(idx),
+						},
 					},
-				},
-			})
+				})
+			}
+			idx++
 		}
 	}
+
+	//updateExprPosMap := info.tblInfo.updateExprPosMap
+	//for idx, expr := range builder.qry.Nodes[info.rootId].ProjectList {
+	//	// reset project with update value
+	//	// reset project with hidden column
+	//	if idx >= info.tblInfo.selectListSize {
+	//		break
+	//	}
+	//
+	//	if updateExprPos, ok := updateExprPosMap[idx]; ok {
+	//		info.projectList = append(info.projectList, &plan.Expr{
+	//			Typ: expr.Typ,
+	//			Expr: &plan.Expr_Col{
+	//				Col: &plan.ColRef{
+	//					RelPos: tag,
+	//					ColPos: int32(updateExprPos),
+	//				},
+	//			},
+	//		})
+	//	} else {
+	//		info.projectList = append(info.projectList, &plan.Expr{
+	//			Typ: expr.Typ,
+	//			Expr: &plan.Expr_Col{
+	//				Col: &plan.ColRef{
+	//					RelPos: tag,
+	//					ColPos: int32(idx),
+	//				},
+	//			},
+	//		})
+	//	}
+	//}
 
 	return nil
 }
