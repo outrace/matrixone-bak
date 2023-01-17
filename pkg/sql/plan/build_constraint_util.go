@@ -52,11 +52,11 @@ type dmlSelectInfo struct {
 type dmlTableInfo struct {
 	objRef          []*ObjectRef
 	tableDefs       []*TableDef
-	updateColOffset []map[string]int
-	updateKeys      []map[string]tree.Expr
-	nameToIdx       map[string]int
-	idToName        map[uint64]string
-	alias           map[string]int
+	updateColOffset []map[string]int       // This slice index correspond to tableDefs
+	updateKeys      []map[string]tree.Expr // This slice index correspond to tableDefs
+	nameToIdx       map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
+	idToName        map[uint64]string      // Mapping of tableId to full path name of table
+	alias           map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
 func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
