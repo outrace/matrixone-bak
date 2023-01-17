@@ -55,19 +55,19 @@ func FilterAndUpdateByRowId(proc *process.Process, bat *batch.Batch, idxList [][
 		}
 		affectedRows = affectedRows + uint64(delBatch.Length())
 		if delBatch.Length() > 0 {
+			if hasAutoCol != nil && hasAutoCol[i] {
+				if err := UpdateInsertBatch(eg, proc.Ctx, proc, tableDef[i].Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef[i].Name); err != nil {
+					delBatch.Clean(proc.Mp())
+					updateBatch.Clean(proc.Mp())
+					return 0, err
+				}
+			}
+
 			err = rels[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
 			if err != nil {
 				delBatch.Clean(proc.Mp())
 				updateBatch.Clean(proc.Mp())
 				return 0, err
-			}
-
-			if hasAutoCol != nil && hasAutoCol[i] {
-				if err := UpdateInsertBatch(eg, proc.Ctx, proc, tableDef[i].Cols, updateBatch, tableDef[i].TblId, ref[i].SchemaName, tableDef[i].Name); err != nil {
-					delBatch.Clean(proc.Mp())
-					updateBatch.Clean(proc.Mp())
-					return 0, err
-				}
 			}
 
 			err = rels[i].Write(proc.Ctx, updateBatch)

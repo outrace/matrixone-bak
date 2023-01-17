@@ -15,6 +15,7 @@
 package stl
 
 import (
+	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -89,6 +90,9 @@ func (bs *Bytes) SetStorageBuf(buf []byte) {
 
 func (bs *Bytes) GetVarValueAt(i int) []byte {
 	pos := bs.getStart(i)
+	if bs.Header == nil || pos >= len(bs.Header) {
+		fmt.Print("ddd")
+	}
 	val := bs.Header[pos]
 	if val.IsSmall() {
 		return val.ByteSlice()
