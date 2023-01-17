@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,7 +42,8 @@ func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int3
 	return affectedRows, nil
 }
 
-func FilterAndUpdateByRowId(proc *process.Process, bat *batch.Batch, idxList [][]int32, rels []engine.Relation, attrsList [][]string) (uint64, error) {
+func FilterAndUpdateByRowId(proc *process.Process, bat *batch.Batch, idxList [][]int32, rels []engine.Relation, attrsList [][]string,
+	hasAutoCol []bool, ref []*plan.ObjectRef, tableDef []*plan.TableDef, eg engine.Engine) (uint64, error) {
 	var affectedRows uint64
 	for i, setIdxList := range idxList {
 		delBatch, updateBatch, err := filterRowIdForUpdate(proc, bat, setIdxList, attrsList[i])
@@ -58,6 +60,14 @@ func FilterAndUpdateByRowId(proc *process.Process, bat *batch.Batch, idxList [][
 				delBatch.Clean(proc.Mp())
 				updateBatch.Clean(proc.Mp())
 				return 0, err
+			}
+
+			if hasAutoCol != nil && hasAutoCol[i] {
+				if err := UpdateInsertBatch(eg, proc.Ctx, proc, tableDef[i].Cols, updateBatch, tableDef[i].TblId, ref[i].SchemaName, tableDef[i].Name); err != nil {
+					delBatch.Clean(proc.Mp())
+					updateBatch.Clean(proc.Mp())
+					return 0, err
+				}
 			}
 
 			err = rels[i].Write(proc.Ctx, updateBatch)

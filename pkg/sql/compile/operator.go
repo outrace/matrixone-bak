@@ -66,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -599,8 +600,12 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
 	oldCtx := n.UpdateCtx
 	updateCtx := &update.UpdateCtx2{
-		Source: make([]engine.Relation, len(oldCtx.Ref)),
-		Ref:    oldCtx.Ref,
+		Source:     make([]engine.Relation, len(oldCtx.Ref)),
+		Attrs:      make([][]string, len(oldCtx.Attr)),
+		Idxs:       make([][]int32, len(oldCtx.Idx)),
+		TableDefs:  make([]*plan.TableDef, len(oldCtx.TableDefs)),
+		Ref:        oldCtx.Ref,
+		HasAutoCol: oldCtx.HasAutoCol,
 
 		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
 		IdxIdx:    make([]int32, len(oldCtx.IdxIdx)),
@@ -620,6 +625,15 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 	copy(updateCtx.IdxIdx, oldCtx.IdxIdx)
 	copy(updateCtx.OnRestrictIdx, oldCtx.OnRestrictIdx)
 
+	for i, def := range oldCtx.TableDefs {
+		updateCtx.TableDefs[i] = plan2.DeepCopyTableDef(def)
+	}
+	for i, list := range oldCtx.Idx {
+		updateCtx.Idxs[i] = make([]int32, len(list.List))
+		for j, id := range list.List {
+			updateCtx.Idxs[i][j] = int32(id)
+		}
+	}
 	for i, list := range oldCtx.IdxVal {
 		updateCtx.IdxVal[i] = make([]int32, len(list.List))
 		for j, id := range list.List {
@@ -631,6 +645,10 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		for j, id := range list.List {
 			updateCtx.OnSetIdx[i][j] = int32(id)
 		}
+	}
+	for i, list := range oldCtx.Attr {
+		updateCtx.Attrs[i] = make([]string, len(list.List))
+		copy(updateCtx.Attrs[i], list.List)
 	}
 	for i, list := range oldCtx.OnSetAttrs {
 		updateCtx.OnSetAttrs[i] = make([]string, len(list.List))
@@ -677,6 +695,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 
 	return &update.Argument{
 		UpdateCtx2: updateCtx,
+		Engine:     eg,
 	}, nil
 }
 

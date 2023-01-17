@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -31,44 +32,32 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 	}
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindCtx := NewBindContext(builder, nil)
+	bindCtx.groupTag = builder.genNewTag()
+	bindCtx.aggregateTag = builder.genNewTag()
+	bindCtx.projectTag = builder.genNewTag()
+
+	err = initUpdateStmt(builder, bindCtx, rewriteInfo, stmt)
+	if err != nil {
+		return nil, err
+	}
 
 	if checkIfStmtHaveRewriteConstraint(tblInfo) {
-		bindCtx.groupTag = builder.genNewTag()
-		bindCtx.aggregateTag = builder.genNewTag()
-		bindCtx.projectTag = builder.genNewTag()
-
-		err = initUpdateStmt(builder, bindCtx, rewriteInfo, stmt)
-		if err != nil {
-			return nil, err
-		}
-
 		for _, tableDef := range tblInfo.tableDefs {
 			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId)
 			if err != nil {
 				return nil, err
 			}
 		}
-
-		// append ProjectNode
-		rewriteInfo.rootId = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			ProjectList: rewriteInfo.projectList,
-			Children:    []int32{rewriteInfo.rootId},
-			BindingTags: []int32{bindCtx.projectTag},
-		}, bindCtx)
-		bindCtx.results = rewriteInfo.projectList
-
-	} else {
-		bindCtx.groupTag = builder.genNewTag()
-		bindCtx.aggregateTag = builder.genNewTag()
-		bindCtx.projectTag = builder.genNewTag()
-
-		err = initUpdateStmt(builder, bindCtx, rewriteInfo, stmt)
-		if err != nil {
-			return nil, err
-		}
-
 	}
+
+	// append ProjectNode
+	rewriteInfo.rootId = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: rewriteInfo.projectList,
+		Children:    []int32{rewriteInfo.rootId},
+		BindingTags: []int32{bindCtx.projectTag},
+	}, bindCtx)
+	bindCtx.results = rewriteInfo.projectList
 
 	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
 	query, err := builder.createQuery()
@@ -76,22 +65,85 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 		return nil, err
 	}
 
-	// // append delete node
-	// deleteCtx := &plan.DeleteTableCtx{
-	// 	DelRef: rewriteInfo.tblInfo.objRef,
-	// }
+	// append delete node
+	updateCtx := &plan.UpdateCtx{
+		Ref:            rewriteInfo.tblInfo.objRef,
+		Idx:            make([]*plan.UpdateCtxIdList, len(rewriteInfo.tblInfo.objRef)),
+		Attr:           make([]*plan.UpdateCtxAttrs, len(rewriteInfo.tblInfo.objRef)),
+		TableDefs:      make([]*plan.TableDef, len(rewriteInfo.tblInfo.tableDefs)),
+		HasAutoCol:     make([]bool, len(rewriteInfo.tblInfo.objRef)),
+		IdxRef:         rewriteInfo.onIdxTbl,
+		IdxIdx:         rewriteInfo.onIdx,
+		IdxVal:         make([]*plan.UpdateCtxIdList, len(rewriteInfo.onIdxVal)),
+		OnRestrictRef:  rewriteInfo.onRestrictTbl,
+		OnRestrictIdx:  rewriteInfo.onRestrict,
+		OnCascadeRef:   rewriteInfo.onCascadeTbl,
+		OnCascadeAttrs: make([]*plan.UpdateCtxAttrs, len(rewriteInfo.onCascadeAttr)),
+		OnCascadeIdx:   make([]*plan.UpdateCtxIdList, len(rewriteInfo.onCascade)),
+		OnSetRef:       rewriteInfo.onSetTbl,
+		OnSetAttrs:     make([]*plan.UpdateCtxAttrs, len(rewriteInfo.onSetAttr)),
+		OnSetIdx:       make([]*plan.UpdateCtxIdList, len(rewriteInfo.onSet)),
+	}
+	idx := int64(0)
+	for i, tableDef := range rewriteInfo.tblInfo.tableDefs {
+		updateCtx.TableDefs[i] = DeepCopyTableDef(tableDef)
+		updateCtx.HasAutoCol[i] = false
+		idxList := make([]int64, len(tableDef.Cols))
+		attrs := make([]string, 0, len(tableDef.Cols)-1)
+		for j, col := range tableDef.Cols {
+			if col.Typ.AutoIncr {
+				updateCtx.HasAutoCol[i] = true
+			}
+			if col.Name != catalog.Row_ID {
+				attrs = append(attrs, col.Name)
+			}
+			idxList[j] = idx
+			idx++
+		}
+		updateCtx.Idx[i] = &plan.UpdateCtxIdList{
+			List: idxList,
+		}
+		updateCtx.Attr[i] = &plan.UpdateCtxAttrs{
+			List: attrs,
+		}
+	}
+	for i, idxList := range rewriteInfo.onIdxVal {
+		updateCtx.IdxVal[i] = &plan.UpdateCtxIdList{
+			List: idxList,
+		}
+	}
+	for i, idxList := range rewriteInfo.onCascade {
+		updateCtx.OnCascadeIdx[i] = &plan.UpdateCtxIdList{
+			List: idxList,
+		}
+	}
+	for i, idxList := range rewriteInfo.onSet {
+		updateCtx.OnSetIdx[i] = &plan.UpdateCtxIdList{
+			List: idxList,
+		}
+	}
+	for i, attrs := range rewriteInfo.onCascadeAttr {
+		updateCtx.OnCascadeAttrs[i] = &plan.UpdateCtxAttrs{
+			List: attrs,
+		}
+	}
+	for i, attrs := range rewriteInfo.onSetAttr {
+		updateCtx.OnSetAttrs[i] = &plan.UpdateCtxAttrs{
+			List: attrs,
+		}
+	}
 
-	// node := &Node{
-	// 	NodeType:  plan.Node_UPDATE,
-	// 	ObjRef:    nil,
-	// 	TableDef:  nil,
-	// 	Children:  []int32{query.Steps[len(query.Steps)-1]},
-	// 	NodeId:    int32(len(query.Nodes)),
-	// 	DeleteCtx: deleteCtx,
-	// }
-	// query.Nodes = append(query.Nodes, node)
-	// query.Steps[len(query.Steps)-1] = node.NodeId
-	// query.StmtType = plan.Query_DELETE
+	node := &Node{
+		NodeType:  plan.Node_UPDATE,
+		ObjRef:    nil,
+		TableDef:  nil,
+		Children:  []int32{query.Steps[len(query.Steps)-1]},
+		NodeId:    int32(len(query.Nodes)),
+		UpdateCtx: updateCtx,
+	}
+	query.Nodes = append(query.Nodes, node)
+	query.Steps[len(query.Steps)-1] = node.NodeId
+	query.StmtType = plan.Query_UPDATE
 
 	return &Plan{
 		Plan: &plan.Plan_Query{

@@ -111,22 +111,34 @@ func DeepCopyUpdateCtx(ctx *plan.UpdateCtx) *plan.UpdateCtx {
 		return nil
 	}
 	newCtx := &plan.UpdateCtx{
-		OnRestrictIdx: make([]int32, len(ctx.OnRestrictIdx)),
-		IdxIdx:        make([]int32, len(ctx.IdxIdx)),
+		Ref:        make([]*plan.ObjectRef, len(ctx.Ref)),
+		Idx:        make([]*plan.UpdateCtxIdList, len(ctx.Idx)),
+		Attr:       make([]*plan.UpdateCtxAttrs, len(ctx.Attr)),
+		HasAutoCol: make([]bool, len(ctx.HasAutoCol)),
+		TableDefs:  make([]*plan.TableDef, len(ctx.TableDefs)),
 
-		Ref:           make([]*plan.ObjectRef, len(ctx.Ref)),
-		IdxRef:        make([]*plan.ObjectRef, len(ctx.IdxRef)),
+		IdxRef: make([]*plan.ObjectRef, len(ctx.IdxRef)),
+		IdxIdx: make([]int32, len(ctx.IdxIdx)),
+		IdxVal: make([]*plan.UpdateCtxIdList, len(ctx.IdxVal)),
+
 		OnRestrictRef: make([]*plan.ObjectRef, len(ctx.OnRestrictRef)),
-		OnCascadeRef:  make([]*plan.ObjectRef, len(ctx.OnCascadeRef)),
-		OnSetRef:      make([]*plan.ObjectRef, len(ctx.OnSetRef)),
+		OnRestrictIdx: make([]int32, len(ctx.OnRestrictIdx)),
 
-		OnSetIdx: make([]*plan.UpdateCtxIdList, len(ctx.OnSetIdx)),
-		IdxVal:   make([]*plan.UpdateCtxIdList, len(ctx.IdxVal)),
-
-		OnSetAttrs:     make([]*plan.UpdateCtxAttrs, len(ctx.OnSetAttrs)),
+		OnCascadeRef:   make([]*plan.ObjectRef, len(ctx.OnCascadeRef)),
 		OnCascadeAttrs: make([]*plan.UpdateCtxAttrs, len(ctx.OnCascadeAttrs)),
+		OnCascadeIdx:   make([]*plan.UpdateCtxIdList, len(ctx.OnCascadeIdx)),
+
+		OnSetRef:   make([]*plan.ObjectRef, len(ctx.OnSetRef)),
+		OnSetIdx:   make([]*plan.UpdateCtxIdList, len(ctx.OnSetIdx)),
+		OnSetAttrs: make([]*plan.UpdateCtxAttrs, len(ctx.OnSetAttrs)),
 	}
 	copy(newCtx.OnRestrictIdx, ctx.OnRestrictIdx)
+	copy(newCtx.IdxIdx, ctx.IdxIdx)
+	copy(newCtx.HasAutoCol, ctx.HasAutoCol)
+
+	for i, def := range ctx.TableDefs {
+		newCtx.TableDefs[i] = DeepCopyTableDef(def)
+	}
 	for i, ref := range ctx.Ref {
 		newCtx.Ref[i] = DeepCopyObjectRef(ref)
 	}
@@ -142,6 +154,12 @@ func DeepCopyUpdateCtx(ctx *plan.UpdateCtx) *plan.UpdateCtx {
 	for i, ref := range ctx.OnSetRef {
 		newCtx.OnSetRef[i] = DeepCopyObjectRef(ref)
 	}
+	for i, list := range ctx.Attr {
+		newCtx.Attr[i] = &plan.UpdateCtxAttrs{
+			List: make([]string, len(list.List)),
+		}
+		copy(newCtx.Attr[i].List, list.List)
+	}
 	for i, list := range ctx.OnSetAttrs {
 		newCtx.OnSetAttrs[i] = &plan.UpdateCtxAttrs{
 			List: make([]string, len(list.List)),
@@ -154,12 +172,12 @@ func DeepCopyUpdateCtx(ctx *plan.UpdateCtx) *plan.UpdateCtx {
 		}
 		copy(newCtx.OnCascadeAttrs[i].List, list.List)
 	}
-	for i, list := range ctx.OnSetIdx {
+	for i, list := range ctx.Idx {
 		if list != nil {
-			newCtx.OnSetIdx[i] = &plan.UpdateCtxIdList{
+			newCtx.Idx[i] = &plan.UpdateCtxIdList{
 				List: make([]int64, len(list.List)),
 			}
-			copy(newCtx.OnSetIdx[i].List, list.List)
+			copy(newCtx.Idx[i].List, list.List)
 		}
 	}
 	for i, list := range ctx.IdxVal {
@@ -168,6 +186,22 @@ func DeepCopyUpdateCtx(ctx *plan.UpdateCtx) *plan.UpdateCtx {
 				List: make([]int64, len(list.List)),
 			}
 			copy(newCtx.IdxVal[i].List, list.List)
+		}
+	}
+	for i, list := range ctx.OnSetIdx {
+		if list != nil {
+			newCtx.OnSetIdx[i] = &plan.UpdateCtxIdList{
+				List: make([]int64, len(list.List)),
+			}
+			copy(newCtx.OnSetIdx[i].List, list.List)
+		}
+	}
+	for i, list := range ctx.OnCascadeIdx {
+		if list != nil {
+			newCtx.OnCascadeIdx[i] = &plan.UpdateCtxIdList{
+				List: make([]int64, len(list.List)),
+			}
+			copy(newCtx.OnCascadeIdx[i].List, list.List)
 		}
 	}
 	return newCtx

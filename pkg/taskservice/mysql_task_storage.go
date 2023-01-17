@@ -33,7 +33,7 @@ var (
 	createTables   = map[string]string{
 		"sys_async_task": `create table if not exists %s.sys_async_task (
 			task_id                     int primary key auto_increment,
-			task_metadata_id            varchar(50) unique not null,
+			task_metadata_id            varchar(50) not null,
 			task_metadata_executor      int,
 			task_metadata_context       blob,
 			task_metadata_option        varchar(1000),
@@ -48,7 +48,7 @@ var (
 			end_at                      bigint)`,
 		"sys_cron_task": `create table if not exists %s.sys_cron_task (
 			cron_task_id				int primary key auto_increment,
-    		task_metadata_id            varchar(50) unique not null,
+    		task_metadata_id            varchar(50) not null,
 			task_metadata_executor      int,
 			task_metadata_context       blob,
 			task_metadata_option 		varchar(1000),

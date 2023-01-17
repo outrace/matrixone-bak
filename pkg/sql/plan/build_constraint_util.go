@@ -34,7 +34,7 @@ type dmlSelectInfo struct {
 	derivedTableId int32
 
 	onIdx    []int32   //remove these row
-	onIdxVal [][]int32 //insert these value
+	onIdxVal [][]int64 //insert these value
 	onIdxTbl []*ObjectRef
 
 	onRestrict    []int32 // check these, not all null then throw error
@@ -280,21 +280,16 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 		Tables: stmt.Tables,
 	}
 	selectList := make([]tree.SelectExpr, len(tableInfo.tableDefs))
+	columnsSize := 0
 	for alias, i := range tableInfo.alias {
 		e, _ := tree.NewUnresolvedNameWithStar(builder.GetContext(), alias)
+		columnsSize += len(tableInfo.tableDefs[i].Cols)
 		selectList[i] = tree.SelectExpr{
 			Expr: e,
 		}
 	}
 
 	//------------------------------------------wuxiliang add--------------------------------------------
-
-	// Count the total number of rows in all tables
-	columnsSize := 0
-	for _, tableDef := range tableInfo.tableDefs {
-		columnsSize += len(tableDef.Cols)
-	}
-
 	counter := 0
 	updateColsOffset := make([]map[string]int, len(tableInfo.updateKeys))
 	for idx, tbUpdateMap := range tableInfo.updateKeys {
@@ -657,6 +652,16 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	info.derivedTableId = info.rootId
 
 	for i, tableDef := range info.tblInfo.tableDefs {
+
+		// compositePkey := ""
+		// if tableDef.CompositePkey != nil {
+		// 	compositePkey = tableDef.CompositePkey.Name
+		// }
+		// clusterByKey := ""
+		// if tableDef.ClusterBy != nil {
+		// 	clusterByKey = tableDef.ClusterBy.Name
+		// }
+
 		updateOffsetMap := info.tblInfo.updateColOffset[i]
 		idx := 0
 		for _, coldef := range tableDef.Cols {
@@ -671,6 +676,12 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 					},
 				})
 			} else {
+				// todo
+				// if coldef.Name == compositePkey {
+
+				// } else if coldef.Name == clusterByKey {
+
+				// }
 				info.projectList = append(info.projectList, &plan.Expr{
 					Typ: coldef.Typ,
 					Expr: &plan.Expr_Col{
@@ -684,117 +695,8 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 			idx++
 		}
 	}
-
-	//updateExprPosMap := info.tblInfo.updateExprPosMap
-	//for idx, expr := range builder.qry.Nodes[info.rootId].ProjectList {
-	//	// reset project with update value
-	//	// reset project with hidden column
-	//	if idx >= info.tblInfo.selectListSize {
-	//		break
-	//	}
-	//
-	//	if updateExprPos, ok := updateExprPosMap[idx]; ok {
-	//		info.projectList = append(info.projectList, &plan.Expr{
-	//			Typ: expr.Typ,
-	//			Expr: &plan.Expr_Col{
-	//				Col: &plan.ColRef{
-	//					RelPos: tag,
-	//					ColPos: int32(updateExprPos),
-	//				},
-	//			},
-	//		})
-	//	} else {
-	//		info.projectList = append(info.projectList, &plan.Expr{
-	//			Typ: expr.Typ,
-	//			Expr: &plan.Expr_Col{
-	//				Col: &plan.ColRef{
-	//					RelPos: tag,
-	//					ColPos: int32(idx),
-	//				},
-	//			},
-	//		})
-	//	}
-	//}
-
 	return nil
 }
-
-//// Modify the tag of the table column which used in the update expression
-//func modifyPlanExprTag(updateExpr *plan.Expr, tag int32) error {
-//	switch expr := updateExpr.Expr.(type) {
-//	case *plan.Expr_Col:
-//		expr.Col.RelPos = tag
-//	case *plan.Expr_F:
-//		args := expr.F.GetArgs()
-//		for _, arg := range args {
-//			err := modifyPlanExprTag(arg, tag)
-//			if err != nil {
-//				return err
-//			}
-//		}
-//	default:
-//		return nil
-//	}
-//	return nil
-//}
-//
-//// Get the map of index location to update plan expression
-//func getIndexOfUpdateCol(tblInfo *dmlTableInfo, ctx CompilerContext) (map[int]*plan.Expr, error) {
-//	indexToPlanExpr := make(map[int]*plan.Expr)
-//	pos := 0
-//	for i := 0; i < len(tblInfo.tableDefs); i++ {
-//		tableDef := tblInfo.tableDefs[i]
-//		updateCols := tblInfo.updateKeys[i]
-//
-//		updatePlanCols, err := bindUpdateCol(ctx, updateCols, tableDef)
-//		if err != nil {
-//			return nil, err
-//		}
-//
-//		for _, col := range tableDef.Cols {
-//			if expr, ok := updatePlanCols[col.Name]; ok {
-//				indexToPlanExpr[pos] = expr
-//			}
-//			pos++
-//		}
-//	}
-//	return indexToPlanExpr, nil
-//}
-//
-//// According to the definition of the table, use the projectbinder to bind the column expression and generate plan expression
-//func bindUpdateCol(ctx CompilerContext, updateCols map[string]tree.Expr, tableDef *TableDef) (map[string]*plan.Expr, error) {
-//	colMap := make(map[string]*plan.Expr)
-//	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-//	bindContext := NewBindContext(builder, nil)
-//
-//	nodeID := builder.appendNode(&plan.Node{
-//		NodeType:    plan.Node_TABLE_SCAN,
-//		Stats:       nil,
-//		ObjRef:      nil,
-//		TableDef:    tableDef,
-//		BindingTags: []int32{builder.genNewTag()},
-//	}, bindContext)
-//
-//	err := builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	projectionBinder := NewProjectionBinder(builder, bindContext, nil)
-//	for colName, updateCol := range updateCols {
-//		astExpr, err := bindContext.qualifyColumnNames(updateCol, nil, false)
-//		if err != nil {
-//			return nil, err
-//		}
-//
-//		expr, err := projectionBinder.BindExpr(astExpr, 0, true)
-//		if err != nil {
-//			return nil, err
-//		}
-//		colMap[colName] = expr
-//	}
-//	return colMap, nil
-//}
 
 func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, tableDef *TableDef, baseNodeId int32) error {
 	posMap := make(map[string]int32)
@@ -864,7 +766,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 				// append join node
 				var joinConds []*Expr
 				var leftExpr *Expr
-				var originIdxList []int32 //we need insert new value.  todo we have bug when cascade to next level
+				var originIdxList []int64 //we need insert new value.  todo we have bug when cascade to next level
 				partsLength := len(idxDef.UIdx.Fields[idx].Parts)
 				if partsLength == 1 {
 					orginIndexColumnName := idxDef.UIdx.Fields[idx].Parts[0]
@@ -879,7 +781,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 							},
 						},
 					}
-					originIdxList = append(originIdxList, originIdx)
+					originIdxList = append(originIdxList, int64(originIdx))
 				} else {
 					args := make([]*Expr, partsLength)
 					for i, column := range idxDef.UIdx.Fields[idx].Parts {
@@ -894,7 +796,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 								},
 							},
 						}
-						originIdxList = append(originIdxList, originIdx)
+						originIdxList = append(originIdxList, int64(originIdx))
 					}
 					leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 					if err != nil {

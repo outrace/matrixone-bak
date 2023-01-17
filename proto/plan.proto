@@ -647,17 +647,21 @@ message UpdateCtx {
 		repeated string list = 1;
 	}
 	repeated ObjectRef ref 				= 1;
-	repeated ObjectRef idx_ref 			= 2;
-	repeated int32 idx_idx 				= 3;
-	repeated idList idx_val 			= 4;
-	repeated ObjectRef on_restrict_ref 	= 5;
-	repeated int32 on_restrict_idx 		= 6;
-	repeated ObjectRef on_cascade_ref 	= 7;
-	repeated attrs on_cascade_attrs 	= 8;
-	repeated idList on_cascade_idx 		= 9;
-	repeated ObjectRef on_set_ref 		= 10;
-	repeated attrs on_set_attrs 		= 11;
-	repeated idList on_set_idx 			= 12;
+	repeated idList idx 				= 2;
+	repeated attrs attr 				= 3;
+	repeated TableDef tableDefs 		= 4;
+	repeated bool has_auto_col     		= 5;
+	repeated ObjectRef idx_ref 			= 6;
+	repeated int32 idx_idx 				= 7;
+	repeated idList idx_val 			= 8;
+	repeated ObjectRef on_restrict_ref 	= 9;
+	repeated int32 on_restrict_idx 		= 10;
+	repeated ObjectRef on_cascade_ref 	= 11;
+	repeated attrs on_cascade_attrs 	= 12;
+	repeated idList on_cascade_idx 		= 13;
+	repeated ObjectRef on_set_ref 		= 14;
+	repeated attrs on_set_attrs 		= 15;
+	repeated idList on_set_idx 			= 16;
 }
 
 message Query {

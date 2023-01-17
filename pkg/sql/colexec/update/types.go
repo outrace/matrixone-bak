@@ -58,8 +58,13 @@ type UpdateCtx struct {
 }
 
 type UpdateCtx2 struct {
-	Source   []engine.Relation
-	Ref      []*plan.ObjectRef
+	Source     []engine.Relation
+	Idxs       [][]int32
+	Attrs      [][]string
+	Ref        []*plan.ObjectRef
+	TableDefs  []*plan.TableDef
+	HasAutoCol []bool
+
 	ColCount []int32
 
 	IdxSource []engine.Relation
