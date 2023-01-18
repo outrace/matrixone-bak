@@ -389,13 +389,15 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	var astSlt *tree.Select
+	// var isInsertValues := false
 	switch slt := stmt.Rows.Select.(type) {
 	case *tree.ValuesClause:
-
+		// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
 		isAllDefault := false
 		if slt.Rows[0] == nil {
 			isAllDefault = true
 		}
+		// isInsertValues = true
 		//example1:insert into a(a) values ();
 		//but it does not work at the case:
 		//insert into a(a) values (0),();
@@ -477,7 +479,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			},
 		}
 		if !isSameColumnType(projExpr.Typ, tableDef.Cols[colIdx].Typ) {
-			projExpr, err = appendCastBeforeExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			projExpr, err = makePlan2CastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return err
 			}
@@ -502,7 +504,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		return bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 	}
 
-	info.projectList = make([]*Expr, 0, len(tableDef.Cols)-1)
+	// have tables : t1(a default 0, b int, pk(a,b)) ,  t2(j int,k int)
+	// rewrite 'insert into t1 select * from t2' to
+	// select 'select _t.j, _t.k, ser(_t.j, _t.k) from (select * from t2) _t
+	// --------
+	// rewrite 'insert into t1(b) values (1)' to
+	// select 'select 0, _t.column_0, ser(_t.j, _t.k) from (select * from values (1)) _t
+	projectList := make([]*Expr, 0, len(tableDef.Cols)-1)
 	for _, col := range tableDef.Cols {
 		if col.Name == catalog.Row_ID {
 			continue
@@ -513,7 +521,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			if err != nil {
 				return err
 			}
-			info.projectList = append(info.projectList, serFunExpr)
+			projectList = append(projectList, serFunExpr)
 
 		} else if col.Name == clusterByKey {
 			// append composite cluster key
@@ -522,36 +530,43 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			if err != nil {
 				return err
 			}
-			info.projectList = append(info.projectList, serFunExpr)
+			projectList = append(projectList, serFunExpr)
 
 		} else {
 			if oldExpr, exists := insertColToExpr[col.Name]; exists {
-				info.projectList = append(info.projectList, oldExpr)
+				projectList = append(projectList, oldExpr)
 			} else {
 				defExpr, err := getDefaultExpr(builder.GetContext(), col)
 				if err != nil {
 					return err
 				}
-				info.projectList = append(info.projectList, defExpr)
+				projectList = append(projectList, defExpr)
 			}
 		}
 	}
-
-	if checkIfStmtHaveRewriteConstraint(info.tblInfo) {
-		err = rewriteDmlSelectInfo(builder, bindCtx, info, tableDef, info.derivedTableId)
-		if err != nil {
-			return err
-		}
-	}
-
 	// append ProjectNode
+	lastTag := builder.genNewTag()
 	info.rootId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
-		ProjectList: info.projectList,
+		ProjectList: projectList,
 		Children:    []int32{info.rootId},
-		BindingTags: []int32{bindCtx.projectTag},
+		BindingTags: []int32{lastTag},
 	}, bindCtx)
-	bindCtx.results = info.projectList
+
+	info.projectList = make([]*Expr, len(projectList))
+	info.derivedTableId = info.rootId
+	for i, e := range projectList {
+		info.projectList[i] = &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: lastTag,
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+	info.idx = int32(len(info.projectList))
 
 	return nil
 }
@@ -751,7 +766,7 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 					},
 				}
 				if !isSameColumnType(posExpr.Typ, coldef.Typ) {
-					projExpr, err = appendCastBeforeExpr(builder.GetContext(), projExpr, coldef.Typ)
+					projExpr, err = makePlan2CastExpr(builder.GetContext(), projExpr, coldef.Typ)
 					if err != nil {
 						return err
 					}

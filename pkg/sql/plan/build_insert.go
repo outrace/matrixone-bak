@@ -57,14 +57,10 @@ func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pl
 		tblInfo: tblInfo,
 	}
 	tblDef := tblInfo.tableDefs[0]
-	isClusterTable := util.TableIsClusterTable(tblDef.GetTableType())
-	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert data into the cluster table")
+	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tblDef, tblInfo.isClusterTable[0])
+	if err != nil {
+		return nil, err
 	}
-	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tblDef, isClusterTable)
-	// if err != nil {
-	// 	return nil, err
-	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindCtx := NewBindContext(builder, nil)
@@ -77,6 +73,24 @@ func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pl
 		return nil, err
 	}
 
+	if checkIfStmtHaveRewriteConstraint(tblInfo) {
+		for _, tableDef := range tblInfo.tableDefs {
+			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// append ProjectNode
+	rewriteInfo.rootId = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: rewriteInfo.projectList,
+		Children:    []int32{rewriteInfo.rootId},
+		BindingTags: []int32{bindCtx.projectTag},
+	}, bindCtx)
+
+	bindCtx.results = rewriteInfo.projectList
 	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
 	query, err := builder.createQuery()
 	if err != nil {
@@ -84,6 +98,57 @@ func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pl
 	}
 
 	// append insert node
+	insertCtx := &plan.InsertCtx{
+		Ref:        rewriteInfo.tblInfo.objRef[0],
+		TableDefs:  rewriteInfo.tblInfo.tableDefs[0],
+		HasAutoCol: false,
+
+		IdxRef: rewriteInfo.onIdxTbl,
+		IdxIdx: rewriteInfo.onIdx,
+		IdxVal: make([]*plan.IdList, len(rewriteInfo.onIdxVal)),
+		IdxPk:  rewriteInfo.onIdxPk,
+
+		OnRestrictRef: rewriteInfo.onRestrictTbl,
+		OnRestrictIdx: rewriteInfo.onRestrict,
+
+		ClusterTable: clusterTable,
+	}
+	idx := int64(0)
+	idxList := make([]int64, len(tblDef.Cols))
+	attrs := make([]string, 0, len(tblDef.Cols))
+	for j, col := range tblDef.Cols {
+		if col.Typ.AutoIncr {
+			insertCtx.HasAutoCol = true
+		}
+		if col.Name != catalog.Row_ID {
+			attrs = append(attrs, col.Name)
+		}
+		idxList[j] = idx
+		idx++
+	}
+	insertCtx.Idx = &plan.IdList{
+		List: idxList,
+	}
+	insertCtx.Attr = &plan.Attrs{
+		List: attrs,
+	}
+	for i, idxList := range rewriteInfo.onIdxVal {
+		insertCtx.IdxVal[i] = &plan.IdList{
+			List: idxList,
+		}
+	}
+
+	node := &Node{
+		NodeType:  plan.Node_UPDATE,
+		ObjRef:    nil,
+		TableDef:  nil,
+		Children:  []int32{query.Steps[len(query.Steps)-1]},
+		NodeId:    int32(len(query.Nodes)),
+		InsertCtx: insertCtx,
+	}
+	query.Nodes = append(query.Nodes, node)
+	query.Steps[len(query.Steps)-1] = node.NodeId
+	query.StmtType = plan.Query_INSERT
 
 	return &Plan{
 		Plan: &plan.Plan_Query{

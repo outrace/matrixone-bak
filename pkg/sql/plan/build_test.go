@@ -30,9 +30,10 @@ import (
 
 // only use in developing
 func TestSingleSQL(t *testing.T) {
+	sql := "update nation set n_name=?"
 	// sql := "INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
 	// sql := "INSERT INTO NATION (N_NATIONKEY, N_REGIONKEY, N_NAME, N_COMMENT) VALUES (1, 21, 'NAME1','comment1'), (2, 22, 'NAME2', 'comment2')"
-	sql := "INSERT INTO NATION SELECT * FROM NATION2"
+	// sql := "INSERT INTO NATION SELECT * FROM NATION2"
 
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, sql)

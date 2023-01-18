@@ -617,6 +617,7 @@ message Node {
     int32   parallelism = 26;
 
 	ClusterTable cluster_table = 27;
+	InsertCtx insert_ctx = 28;
 }
 
 message DeleteCtx {
@@ -653,10 +654,12 @@ message UpdateCtx {
 	repeated attrs attr 				= 3;
 	repeated TableDef tableDefs 		= 4;
 	repeated bool has_auto_col     		= 5;
+
 	repeated ObjectRef idx_ref 			= 6;
 	repeated int32 idx_idx 				= 7;
 	repeated idList idx_val 			= 8;
 	repeated int32 idx_pk 				= 9;
+
 	repeated ObjectRef on_restrict_ref 	= 10;
 	repeated int32 on_restrict_idx 		= 11;
 	repeated ObjectRef on_cascade_ref 	= 12;
@@ -665,6 +668,32 @@ message UpdateCtx {
 	repeated ObjectRef on_set_ref 		= 15;
 	repeated attrs on_set_attrs 		= 16;
 	repeated idList on_set_idx 			= 17;
+}
+
+message IdList {
+	repeated int64 list = 1;
+}
+
+message Attrs {
+	repeated string list = 1;
+}
+
+message InsertCtx {
+	ObjectRef ref 			= 1;
+	IdList idx 				= 2;
+	Attrs attr 				= 3;
+	TableDef tableDefs 		= 4;
+	bool has_auto_col     	= 5;
+
+	repeated ObjectRef idx_ref 			= 6;
+	repeated int32 idx_idx 				= 7;
+	repeated IdList idx_val 			= 8;
+	repeated int32 idx_pk 				= 9;
+
+	repeated ObjectRef on_restrict_ref	= 10;
+	repeated int32	on_restrict_idx		= 11;
+
+	ClusterTable cluster_table = 12;
 }
 
 message Query {
