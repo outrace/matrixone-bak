@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -110,6 +111,10 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 	b.SetZs(vector.Length(b.Vecs[0]), proc.Mp())
 	return b, vector.Length(b.Vecs[0])
 }
+
+var SerialWithCompacted = serialWithCompacted
+var CompactSingleIndexCol = compactSingleIndexCol
+var CompactPrimaryCol = compactPrimaryCol
 
 // SerialWithCompacted have a similar function named Serial
 // SerialWithCompacted function is used by BuildUniqueKeyBatch

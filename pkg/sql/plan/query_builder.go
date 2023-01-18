@@ -1171,6 +1171,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
 		colCount := len(valuesClause.Rows[0])
+		for j := 1; j < rowCount; j++ {
+			if len(valuesClause.Rows[j]) != colCount {
+				return 0, moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("have different column count in row '%v'", j))
+			}
+		}
+
 		ctx.hasSingleRow = rowCount == 1
 		rowSetData := &plan.RowsetData{
 			Cols: make([]*plan.ColData, colCount),
@@ -1203,7 +1209,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				}
 				if len(argsCastType) > 0 {
 					colTyp = makePlan2Type(&argsCastType[0])
-					for j := 0; j < rowCount; i++ {
+					for j := 0; j < rowCount; j++ {
 						if rows[j].Typ.Id != int32(types.T_any) && rows[j].Typ.Id != colTyp.Id {
 							rows[j], err = appendCastBeforeExpr(builder.GetContext(), rows[j], colTyp)
 							if err != nil {

@@ -30,9 +30,11 @@ import (
 
 // only use in developing
 func TestSingleSQL(t *testing.T) {
-	sql := "UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2"
+	// sql := "INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
+	// sql := "INSERT INTO NATION (N_NATIONKEY, N_REGIONKEY, N_NAME, N_COMMENT) VALUES (1, 21, 'NAME1','comment1'), (2, 22, 'NAME2', 'comment2')"
+	sql := "INSERT INTO NATION SELECT * FROM NATION2"
 
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -600,7 +602,6 @@ func TestInsert(t *testing.T) {
 		"INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
 		"INSERT INTO NATION (N_NATIONKEY, N_REGIONKEY, N_NAME, N_COMMENT) VALUES (1, 21, 'NAME1','comment1'), (2, 22, 'NAME2', 'comment2')",
 		"INSERT INTO NATION SELECT * FROM NATION2",
-		"insert into nation select * from nation2",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 

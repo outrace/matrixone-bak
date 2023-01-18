@@ -68,7 +68,7 @@ type UpdateCtx2 struct {
 	ColCount []int32
 
 	IdxSource []engine.Relation
-	IdxIdx    []int32
+	IdxPk     []int32
 	IdxVal    [][]int32
 
 	OnRestrictIdx []int32

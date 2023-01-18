@@ -656,14 +656,15 @@ message UpdateCtx {
 	repeated ObjectRef idx_ref 			= 6;
 	repeated int32 idx_idx 				= 7;
 	repeated idList idx_val 			= 8;
-	repeated ObjectRef on_restrict_ref 	= 9;
-	repeated int32 on_restrict_idx 		= 10;
-	repeated ObjectRef on_cascade_ref 	= 11;
-	repeated attrs on_cascade_attrs 	= 12;
-	repeated idList on_cascade_idx 		= 13;
-	repeated ObjectRef on_set_ref 		= 14;
-	repeated attrs on_set_attrs 		= 15;
-	repeated idList on_set_idx 			= 16;
+	repeated int32 idx_pk 				= 9;
+	repeated ObjectRef on_restrict_ref 	= 10;
+	repeated int32 on_restrict_idx 		= 11;
+	repeated ObjectRef on_cascade_ref 	= 12;
+	repeated attrs on_cascade_attrs 	= 13;
+	repeated idList on_cascade_idx 		= 14;
+	repeated ObjectRef on_set_ref 		= 15;
+	repeated attrs on_set_attrs 		= 16;
+	repeated idList on_set_idx 			= 17;
 }
 
 message Query {

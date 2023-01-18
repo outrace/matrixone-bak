@@ -18,9 +18,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -38,6 +40,79 @@ func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int3
 			}
 		}
 		delBatch.Clean(proc.Mp())
+	}
+	return affectedRows, nil
+}
+
+func FilterAndUpdateUniqueKeyByRowId(proc *process.Process, bat *batch.Batch, idxList [][]int32, rels []engine.Relation, pkList []int32) (uint64, error) {
+	var affectedRows uint64
+	for i, setIdxList := range idxList {
+		if pkList[i] != -1 {
+			setIdxList = append(setIdxList, pkList[i])
+		}
+		attrs := make([]string, len(setIdxList)-1)
+		delBatch, updateBatch, err := filterRowIdForUpdate(proc, bat, setIdxList, attrs)
+		if err != nil {
+			return 0, err
+		}
+		if delBatch == nil && updateBatch == nil {
+			continue
+		}
+		affectedRows = affectedRows + uint64(delBatch.Length())
+		if delBatch.Length() > 0 {
+			// delete old unique key
+			err := rels[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+			if err != nil {
+				delBatch.Clean(proc.Mp())
+				updateBatch.Clean(proc.Mp())
+				return 0, err
+			}
+
+			//updateBatch 、 pk的情况，重新构造一个要Insert的batch，
+			var ukBatch *batch.Batch
+			var bitMap *nulls.Nulls
+			var vec *vector.Vector
+			colCount := len(updateBatch.Vecs)
+			if pkList[i] == -1 {
+				//have no pk
+				ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName})
+				if colCount == 1 {
+					vec, _ = util.CompactSingleIndexCol(updateBatch.Vecs[0], proc)
+					ukBatch.SetVector(0, vec)
+				} else {
+					vec, _ = util.SerialWithCompacted(updateBatch.Vecs, proc)
+				}
+				ukBatch.SetVector(0, vec)
+				ukBatch.SetZs(vec.Length(), proc.Mp())
+			} else {
+				ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName})
+				// the last idx is pk
+				if colCount == 2 {
+					vec, bitMap = util.CompactSingleIndexCol(updateBatch.Vecs[0], proc)
+				} else {
+					vs := make([]*vector.Vector, 0)
+					for j := 0; j < colCount-1; j++ {
+						vs = append(vs, updateBatch.Vecs[j])
+					}
+					vec, bitMap = util.SerialWithCompacted(vs, proc)
+				}
+				ukBatch.SetVector(0, vec)
+				ukBatch.SetZs(vec.Length(), proc.Mp())
+				// append pk vector
+				vec = util.CompactPrimaryCol(updateBatch.Vecs[len(updateBatch.Vecs)-1], bitMap, proc)
+				ukBatch.SetVector(1, vec)
+			}
+
+			// insert new unique key
+			err = rels[i].Write(proc.Ctx, ukBatch)
+			if err != nil {
+				delBatch.Clean(proc.Mp())
+				updateBatch.Clean(proc.Mp())
+				return 0, err
+			}
+		}
+		delBatch.Clean(proc.Mp())
+		updateBatch.Clean(proc.Mp())
 	}
 	return affectedRows, nil
 }

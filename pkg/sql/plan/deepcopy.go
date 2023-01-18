@@ -119,6 +119,7 @@ func DeepCopyUpdateCtx(ctx *plan.UpdateCtx) *plan.UpdateCtx {
 
 		IdxRef: make([]*plan.ObjectRef, len(ctx.IdxRef)),
 		IdxIdx: make([]int32, len(ctx.IdxIdx)),
+		IdxPk:  make([]int32, len(ctx.IdxPk)),
 		IdxVal: make([]*plan.UpdateCtxIdList, len(ctx.IdxVal)),
 
 		OnRestrictRef: make([]*plan.ObjectRef, len(ctx.OnRestrictRef)),
@@ -134,6 +135,7 @@ func DeepCopyUpdateCtx(ctx *plan.UpdateCtx) *plan.UpdateCtx {
 	}
 	copy(newCtx.OnRestrictIdx, ctx.OnRestrictIdx)
 	copy(newCtx.IdxIdx, ctx.IdxIdx)
+	copy(newCtx.IdxPk, ctx.IdxPk)
 	copy(newCtx.HasAutoCol, ctx.HasAutoCol)
 
 	for i, def := range ctx.TableDefs {

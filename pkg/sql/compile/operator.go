@@ -610,8 +610,8 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		HasAutoCol: oldCtx.HasAutoCol,
 
 		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
-		IdxIdx:    make([]int32, len(oldCtx.IdxIdx)),
 		IdxVal:    make([][]int32, len(oldCtx.IdxVal)),
+		IdxPk:     make([]int32, len(oldCtx.IdxPk)),
 
 		OnRestrictIdx: make([]int32, len(oldCtx.OnRestrictIdx)),
 
@@ -624,7 +624,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		OnSetAttrs:  make([][]string, len(oldCtx.OnSetAttrs)),
 	}
 
-	copy(updateCtx.IdxIdx, oldCtx.IdxIdx)
+	copy(updateCtx.IdxPk, oldCtx.IdxPk)
 	copy(updateCtx.OnRestrictIdx, oldCtx.OnRestrictIdx)
 
 	for i, def := range oldCtx.TableDefs {
@@ -637,9 +637,10 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		}
 	}
 	for i, list := range oldCtx.IdxVal {
-		updateCtx.IdxVal[i] = make([]int32, len(list.List))
+		updateCtx.IdxVal[i] = make([]int32, len(list.List)+1)
+		updateCtx.IdxVal[i][0] = oldCtx.IdxIdx[i]
 		for j, id := range list.List {
-			updateCtx.IdxVal[i][j] = int32(id)
+			updateCtx.IdxVal[i][j+1] = int32(id)
 		}
 	}
 	for i, list := range oldCtx.OnSetIdx {

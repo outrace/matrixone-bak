@@ -74,6 +74,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 		HasAutoCol:     make([]bool, len(rewriteInfo.tblInfo.objRef)),
 		IdxRef:         rewriteInfo.onIdxTbl,
 		IdxIdx:         rewriteInfo.onIdx,
+		IdxPk:          rewriteInfo.onIdxPk,
 		IdxVal:         make([]*plan.UpdateCtxIdList, len(rewriteInfo.onIdxVal)),
 		OnRestrictRef:  rewriteInfo.onRestrictTbl,
 		OnRestrictIdx:  rewriteInfo.onRestrict,

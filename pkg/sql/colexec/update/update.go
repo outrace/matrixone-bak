@@ -76,15 +76,11 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		}
 	}
 
-	// delete old unique index
-	_, err = colexec.FilterAndDelByRowId(proc, bat, updateCtx.IdxIdx, updateCtx.IdxSource)
+	// delete old unique index & insert new unique index
+	_, err = colexec.FilterAndUpdateUniqueKeyByRowId(proc, bat, updateCtx.IdxVal, updateCtx.IdxSource, updateCtx.IdxPk)
 	if err != nil {
 		return false, err
 	}
-
-	// insert new unique index
-
-	// deal with auto incr column
 
 	// update child table(which ref on delete cascade)
 	_, err = colexec.FilterAndUpdateByRowId(proc, bat, updateCtx.OnCascadeIdx, updateCtx.OnCascadeSource, updateCtx.OnCascadeAttrs, nil, nil, nil, nil)

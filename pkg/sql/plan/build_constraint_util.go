@@ -35,6 +35,7 @@ type dmlSelectInfo struct {
 
 	onIdx    []int32   //remove these row
 	onIdxVal [][]int64 //insert these value
+	onIdxPk  []int32   //origin table's pk. -1 means origin table have no pk
 	onIdxTbl []*ObjectRef
 
 	onRestrict    []int32 // check these, not all null then throw error
@@ -52,6 +53,7 @@ type dmlSelectInfo struct {
 type dmlTableInfo struct {
 	objRef          []*ObjectRef
 	tableDefs       []*TableDef
+	isClusterTable  []bool
 	updateColOffset []map[string]int       // This slice index correspond to tableDefs
 	updateKeys      []map[string]tree.Expr // This slice index correspond to tableDefs
 	nameToIdx       map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
@@ -204,6 +206,12 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from view")
 	}
+
+	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
+	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table")
+	}
+
 	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
 	}
@@ -243,6 +251,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	nowIdx := len(tblInfo.tableDefs)
+	tblInfo.isClusterTable = append(tblInfo.isClusterTable, isClusterTable)
 	tblInfo.objRef = append(tblInfo.objRef, &ObjectRef{
 		Obj:        int64(tableDef.TblId),
 		SchemaName: dbName,
@@ -342,11 +351,31 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 
 func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) error {
 	var err error
+	tableDef := info.tblInfo.tableDefs[0]
+	compositePkey := ""
+	if tableDef.CompositePkey != nil {
+		compositePkey = tableDef.CompositePkey.Name
+	}
+	clusterByKey := ""
+	if tableDef.ClusterBy != nil {
+		clusterByKey = tableDef.ClusterBy.Name
+	}
+
 	syntaxHasColumnNames := false
+	var updateColumns []string
 	if stmt.Columns != nil {
 		syntaxHasColumnNames = true
+		for _, column := range stmt.Columns {
+			updateColumns = append(updateColumns, string(column))
+		}
+	} else {
+		for _, col := range tableDef.Cols {
+			if col.Name == catalog.Row_ID || col.Name == compositePkey || col.Name == clusterByKey {
+				continue
+			}
+			updateColumns = append(updateColumns, col.Name)
+		}
 	}
-	tableDef := info.tblInfo.tableDefs[0]
 
 	var astSlt *tree.Select
 	switch slt := stmt.Rows.Select.(type) {
@@ -394,15 +423,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		return moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	compositePkey := ""
-	if tableDef.CompositePkey != nil {
-		compositePkey = tableDef.CompositePkey.Name
-	}
-	clusterByKey := ""
-	if tableDef.ClusterBy != nil {
-		clusterByKey = tableDef.ClusterBy.Name
-	}
-
 	subCtx := NewBindContext(builder, bindCtx)
 	info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
 	if err != nil {
@@ -416,6 +436,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	lastNode := builder.qry.Nodes[info.rootId]
+	// have not row_id now. but we need it for on duplicate/replace
+	if len(updateColumns) != len(lastNode.ProjectList) {
+		return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+	}
+
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
@@ -425,12 +450,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		colToIdx[col.Name] = i
 	}
 
-	updateColumnToExpr := make(map[string]*Expr)
-	for i, column := range stmt.Columns {
-		columnStr := string(column)
-		colIdx, exists := colToIdx[columnStr]
+	insertColToExpr := make(map[string]*Expr)
+	for i, column := range updateColumns {
+		colIdx, exists := colToIdx[column]
 		if !exists {
-			return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", columnStr)
+			return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", column)
 		}
 		projExpr := &plan.Expr{
 			Typ: oldProject[i].Typ,
@@ -447,31 +471,34 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				return err
 			}
 		}
-		updateColumnToExpr[columnStr] = projExpr
+		insertColToExpr[column] = projExpr
+	}
+
+	getSerFunExpr := func(colNames []string) (*Expr, error) {
+		args := make([]*Expr, len(colNames))
+		for _, colName := range colNames {
+			if oldExpr, exists := insertColToExpr[colName]; exists {
+				args = append(args, oldExpr)
+			} else {
+				col := tableDef.Cols[colToIdx[colName]]
+				defExpr, err := getDefaultExpr(builder.GetContext(), col)
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, defExpr)
+			}
+		}
+		return bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 	}
 
 	info.projectList = make([]*Expr, 0, len(tableDef.Cols)-1)
-
 	for _, col := range tableDef.Cols {
 		if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == compositePkey {
 			// append composite primary key
 			colNames := util.SplitCompositePrimaryKeyColumnName(compositePkey)
-			args := make([]*Expr, len(colNames))
-			for _, colName := range colNames {
-				if oldExpr, exists := updateColumnToExpr[col.Name]; exists {
-					args = append(args, oldExpr)
-				} else {
-					col = tableDef.Cols[colToIdx[colName]]
-					defExpr, err := getDefaultExpr(builder.GetContext(), col)
-					if err != nil {
-						return err
-					}
-					args = append(args, defExpr)
-				}
-			}
-			serFunExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			serFunExpr, err := getSerFunExpr(colNames)
 			if err != nil {
 				return err
 			}
@@ -480,27 +507,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		} else if col.Name == clusterByKey {
 			// append composite cluster key
 			colNames := util.SplitCompositeClusterByColumnName(clusterByKey)
-			args := make([]*Expr, len(colNames))
-			for _, colName := range colNames {
-				if oldExpr, exists := updateColumnToExpr[col.Name]; exists {
-					args = append(args, oldExpr)
-				} else {
-					col = tableDef.Cols[colToIdx[colName]]
-					defExpr, err := getDefaultExpr(builder.GetContext(), col)
-					if err != nil {
-						return err
-					}
-					args = append(args, defExpr)
-				}
-			}
-			serFunExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			serFunExpr, err := getSerFunExpr(colNames)
 			if err != nil {
 				return err
 			}
 			info.projectList = append(info.projectList, serFunExpr)
 
 		} else {
-			if oldExpr, exists := updateColumnToExpr[col.Name]; exists {
+			if oldExpr, exists := insertColToExpr[col.Name]; exists {
 				info.projectList = append(info.projectList, oldExpr)
 			} else {
 				defExpr, err := getDefaultExpr(builder.GetContext(), col)
@@ -650,7 +664,8 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 		return err
 	}
 
-	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
+	lastNode := builder.qry.Nodes[info.rootId]
+	tag := lastNode.BindingTags[0]
 	info.derivedTableId = info.rootId
 
 	idx := 0
@@ -714,15 +729,24 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 
 		for _, coldef := range tableDef.Cols {
 			if pos, ok := updateOffsetMap[coldef.Name]; ok {
-				info.projectList = append(info.projectList, &plan.Expr{
-					Typ: coldef.Typ,
+				posExpr := lastNode.ProjectList[pos]
+				projExpr := &plan.Expr{
+					Typ: posExpr.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: tag,
 							ColPos: int32(pos),
 						},
 					},
-				})
+				}
+				if !isSameColumnType(posExpr.Typ, coldef.Typ) {
+					projExpr, err = appendCastBeforeExpr(builder.GetContext(), projExpr, coldef.Typ)
+					if err != nil {
+						return err
+					}
+				}
+
+				info.projectList = append(info.projectList, projExpr)
 
 			} else if coldef.Name == compositePkey && compositePkeyExpr != nil {
 				info.projectList = append(info.projectList, compositePkeyExpr)
@@ -765,8 +789,20 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 		}
 	}
 
+	pkPos := int32(-1)
+	compositePkey := ""
+	if tableDef.CompositePkey != nil {
+		compositePkey = tableDef.CompositePkey.Name
+	}
 	for idx, col := range tableDef.Cols {
-		posMap[col.Name] = int32(beginPos + idx)
+		pos := int32(beginPos + idx)
+		if col.Name == compositePkey {
+			pkPos = pos
+		} else if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
+			pkPos = pos
+		}
+
+		posMap[col.Name] = pos
 		typMap[col.Name] = col.Typ
 		id2name[col.ColId] = col.Name
 	}
@@ -879,6 +915,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 				info.onIdxTbl = append(info.onIdxTbl, idxRef)
 				info.onIdx = append(info.onIdx, info.idx)
 				info.onIdxVal = append(info.onIdxVal, originIdxList)
+				info.onIdxPk = append(info.onIdxPk, pkPos)
 				info.idx = info.idx + 1
 			}
 		}
