@@ -65,8 +65,6 @@ type UpdateCtx2 struct {
 	TableDefs  []*plan.TableDef
 	HasAutoCol []bool
 
-	ColCount []int32
-
 	IdxSource []engine.Relation
 	IdxPk     []int32
 	IdxVal    [][]int32

@@ -680,8 +680,8 @@ message Attrs {
 
 message InsertCtx {
 	ObjectRef ref 			= 1;
-	IdList idx 				= 2;
-	Attrs attr 				= 3;
+	repeated int32 idx 		= 2;
+	repeated string attr 	= 3;
 	TableDef tableDefs 		= 4;
 	bool has_auto_col     	= 5;
 

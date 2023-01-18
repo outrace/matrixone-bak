@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,7 +28,10 @@ import (
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
-	buildInsert2(stmt, ctx, isReplace)
+	_, err = buildInsert2(stmt, ctx, isReplace)
+	if err != nil {
+		fmt.Print("aa")
+	}
 	if stmt.OnDuplicateUpdate != nil {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ...")
 	}
@@ -113,8 +117,8 @@ func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pl
 
 		ClusterTable: clusterTable,
 	}
-	idx := int64(0)
-	idxList := make([]int64, len(tblDef.Cols))
+	idx := int32(0)
+	idxList := make([]int32, len(tblDef.Cols))
 	attrs := make([]string, 0, len(tblDef.Cols))
 	for j, col := range tblDef.Cols {
 		if col.Typ.AutoIncr {
@@ -126,12 +130,8 @@ func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pl
 		idxList[j] = idx
 		idx++
 	}
-	insertCtx.Idx = &plan.IdList{
-		List: idxList,
-	}
-	insertCtx.Attr = &plan.Attrs{
-		List: attrs,
-	}
+	insertCtx.Idx = idxList
+	insertCtx.Attr = attrs
 	for i, idxList := range rewriteInfo.onIdxVal {
 		insertCtx.IdxVal[i] = &plan.IdList{
 			List: idxList,

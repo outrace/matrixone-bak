@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
@@ -43,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -348,6 +348,47 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 		E: colexec.RewriteFilterExprList(n.FilterList),
 	}
 }
+
+// func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
+// 	oldCtx := n.InsertCtx
+// 	newCtx := &insert.InsertCtx{
+// 		Idxs:       oldCtx.Idx,
+// 		Attrs:      oldCtx.Attr,
+// 		Ref:        oldCtx.Ref,
+// 		TableDefs:  oldCtx.TableDefs,
+// 		HasAutoCol: oldCtx.HasAutoCol,
+
+// 		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
+// 		IdxPk:     oldCtx.IdxPk,
+// 		IdxVal:    make([][]int32, len(oldCtx.IdxVal)),
+
+// 		OnRestrictIdx: []int32{},
+// 	}
+
+// 	rel, err := getRel(proc, eg, oldCtx.Ref)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	newCtx.Source = rel
+// 	for i, ref := range oldCtx.IdxRef {
+// 		rel, err := getRel(proc, eg, ref)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		newCtx.IdxSource[i] = rel
+// 	}
+// 	for i, list := range oldCtx.IdxVal {
+// 		newCtx.IdxVal[i] = make([]int32, len(list.List))
+// 		for j, id := range list.List {
+// 			newCtx.IdxVal[i][j] = int32(id)
+// 		}
+// 	}
+
+// 	return &insert.Argument{
+// 		InsertCtx: newCtx,
+// 		Engine:    eg,
+// 	}, nil
+// }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
 	oldCtx := n.DeleteCtx
