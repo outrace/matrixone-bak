@@ -286,6 +286,19 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap m
 	return tblInfo, nil
 }
 
+// Get the number of columns in the table definition,
+// exclude the hidden columns of the composite primary key and the hidden columns of the composite cluster by
+func getTableValidColsSize(tableDef *TableDef) int {
+	counter := 0
+	for _, coldef := range tableDef.Cols {
+		if util.JudgeIsCompositePrimaryKeyColumn(coldef.Name) || util.JudgeIsCompositeClusterByColumn(coldef.Name) {
+			continue
+		}
+		counter++
+	}
+	return counter
+}
+
 func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo, haveConstraint bool) (int32, error) {
 	fromTables := &tree.From{
 		Tables: stmt.Tables,
@@ -294,13 +307,12 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	columnsSize := 0
 	for alias, i := range tableInfo.alias {
 		e, _ := tree.NewUnresolvedNameWithStar(builder.GetContext(), alias)
-		columnsSize += len(tableInfo.tableDefs[i].Cols)
+		columnsSize += getTableValidColsSize(tableInfo.tableDefs[i])
 		selectList[i] = tree.SelectExpr{
 			Expr: e,
 		}
 	}
 
-	//------------------------------------------wuxiliang add--------------------------------------------
 	counter := 0
 	updateColsOffset := make([]map[string]int, len(tableInfo.updateKeys))
 	for idx, tbUpdateMap := range tableInfo.updateKeys {
@@ -329,7 +341,6 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 		}
 	}
 	tableInfo.updateColOffset = updateColsOffset
-	//--------------------------------------wuxiliang add------------------------------------------------
 
 	selectAst := &tree.Select{
 		Select: &tree.SelectClause{
@@ -688,9 +699,9 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 				return nil, nil
 			}
 			args := make([]*Expr, len(colNames))
-			for _, colName := range colNames {
+			for j, colName := range colNames {
 				coldef := tableDef.Cols[nameToIdx[colName]]
-				args = append(args, &plan.Expr{
+				args[j] = &plan.Expr{
 					Typ: coldef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
@@ -698,7 +709,7 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 							ColPos: nameToIdx[colName],
 						},
 					},
-				})
+				}
 			}
 			return bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 		}
@@ -765,7 +776,6 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 					},
 				})
 			}
-
 			idx++
 		}
 	}
